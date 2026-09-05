@@ -44,6 +44,8 @@ control still feels like an instrument rather than a remote control. Run with
 
 ## Install
 
+Python 3.11 or newer.
+
 ```bash
 git clone https://github.com/nariman7596/Musical-Instrument-Gesture-Controller.git
 cd Musical-Instrument-Gesture-Controller

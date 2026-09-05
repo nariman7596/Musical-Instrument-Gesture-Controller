@@ -7,7 +7,7 @@ name = "gesture-midi-controller"
 version = "0.1.0"
 description = "Turn hand gestures in front of a camera into real-time MIDI control changes"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 keywords = ["midi", "mediapipe", "computer-vision", "music", "gesture-recognition"]
 classifiers = [
