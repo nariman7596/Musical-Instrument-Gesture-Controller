@@ -115,6 +115,20 @@ python main.py --dry-run --show
 `--camera` takes a webcam index (`0`, `1`, ...), an RTSP/HTTP URL, or the path to
 a video file — handy for developing against a recording instead of your own arm.
 
+### The one-file version
+
+If you just want to wave your hand and hear a melody, `examples/one_file_gesture_music.py`
+is the whole idea in a single script with nothing to configure:
+
+```bash
+python examples/one_file_gesture_music.py
+```
+
+Camera, tracking, note choice, synthesis and audio out, all in one file — useful
+for reading end to end, or for lifting into your own project. The full version
+below adds MIDI output to a DAW, JSON mapping files, two-handed gestures, hot
+reload and the meter overlay.
+
 ### Playing it like an instrument
 
 `config/play.json` maps the right hand's position to **notes of a pentatonic
@@ -389,9 +403,11 @@ that a DAW has to chew through. With it, a still hand sends nothing at all.
 │   ├── default_mapping.json   # the studio patch described above
 │   ├── play.json              # playable pentatonic lead, for --synth
 │   └── theremin.json          # wide, two-handed patch for a distant camera
+├── examples/
+│   └── one_file_gesture_music.py  # the whole idea in one script
 ├── notebooks/
 │   └── 01_landmark_exploration.ipynb
-└── tests/                     # 233 tests, no camera, MIDI or audio hardware needed
+└── tests/                     # 245 tests, no camera, MIDI or audio hardware needed
 ```
 
 ## Tests
