@@ -27,6 +27,7 @@ flowchart LR
     D --> E[Mapping<br/>JSON, hot-reloaded]
     E --> F[python-rtmidi<br/>virtual MIDI port]
     F --> G[DAW / synth / DDJ]
+    F --> H[built-in synth<br/>--synth]
 ```
 
 Every stage is a separate module under `src/`, and the interesting one is the
@@ -113,6 +114,32 @@ python main.py --dry-run --show
 
 `--camera` takes a webcam index (`0`, `1`, ...), an RTSP/HTTP URL, or the path to
 a video file — handy for developing against a recording instead of your own arm.
+
+### Hearing it without a DAW
+
+A control change only *shapes* a sound that something else is playing, so the
+first run is quietly confusing: everything works and nothing is audible. The
+built-in synth removes that step —
+
+```bash
+python main.py --camera 0 --show --synth
+```
+
+— and you hear the filter open as you raise your hand, with no DAW, no port
+routing and nothing else to install. It holds a drone note (A2 by default, so
+there is always something for the filter to shape), adds voices when a note
+mapping fires, and follows volume, pan, resonance, reverb, modulation, sustain
+and pitch bend. It is fed the *same* `MidiEvent` objects that go out of the MIDI
+port, so what you hear is what a DAW receives.
+
+| Flag | Purpose |
+| --- | --- |
+| `--synth` | turn the monitor synth on |
+| `--drone NOTE` | note held continuously; `-1` for none (default: 45, A2) |
+| `--synth-gain` | output level (default: 0.28) |
+
+It is a monitor, not the instrument — the way a metronome is a monitor. For real
+work, send the MIDI to a real synth.
 
 ### Keyboard controls (preview window)
 
@@ -323,13 +350,14 @@ that a DAW has to chew through. With it, a still hand sends nothing at all.
 │   ├── smoother.py            # EMA smoothing + Schmitt trigger
 │   ├── midi_mapper.py         # config parsing, scaling, hot reload
 │   ├── midi_output.py         # python-rtmidi virtual/real port output
+│   ├── synth.py               # built-in monitor synth, so it makes sound alone
 │   └── visualizer.py          # skeleton + CC meter overlay
 ├── config/
 │   ├── default_mapping.json   # the studio patch described above
 │   └── theremin.json          # wide, two-handed patch for a distant camera
 ├── notebooks/
 │   └── 01_landmark_exploration.ipynb
-└── tests/                     # 182 tests, no camera or MIDI hardware needed
+└── tests/                     # 205 tests, no camera, MIDI or audio hardware needed
 ```
 
 ## Tests
@@ -359,6 +387,8 @@ the dry-run sink, and skips itself if MediaPipe is not installed.
 | Values jump around | raise `smoothing.window`, or widen the `release`/`threshold` gap |
 | Controls feel sluggish | lower `smoothing.window`, drop `--show`, or use `--max-hands 1` |
 | Gestures never trigger | run `--debug-features`, read the real values, adjust `calibration` |
+| Everything works but there is no sound | expected — CCs only shape a sound that already exists. Add `--synth`, or hold notes on a keyboard while gesturing |
+| `audio output unavailable: PortAudio library not found` | Linux only; `sudo apt install libportaudio2`. The macOS and Windows wheels bundle it |
 | RTSP stream stutters | try `--rtsp-transport udp`, or lower the camera's resolution |
 
 ## License

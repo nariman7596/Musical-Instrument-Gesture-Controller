@@ -166,6 +166,51 @@ class TestLoopWiring:
         assert output.events == [] and len(tracker.calls) == 4
 
 
+class TestSynthWiring:
+    """The built-in synth must hear exactly what the MIDI port is sent."""
+
+    class Recorder:
+        def __init__(self):
+            self.events = []
+
+        def handle_all(self, events):
+            self.events.extend(events)
+
+        def stop(self):
+            pass
+
+    def test_synth_and_midi_port_receive_the_same_events(self):
+        controller = app.GestureController(parse(["--dry-run", "--no-hot-reload"]))
+        controller.midi_target = "test"
+        recorder = self.Recorder()
+        controller.synth = recorder
+        output = NullOutput()
+        controller._loop(
+            FakeCamera(TestLoopWiring.frames(3, 640, 480)), FakeTracker(), output, None
+        )
+        assert recorder.events == output.events
+
+    def test_muting_silences_the_synth_too(self):
+        controller = app.GestureController(parse(["--dry-run", "--no-hot-reload"]))
+        controller.midi_target = "test"
+        controller.muted = True
+        recorder = self.Recorder()
+        controller.synth = recorder
+        controller._loop(
+            FakeCamera(TestLoopWiring.frames(3, 640, 480)), FakeTracker(), NullOutput(), None
+        )
+        assert recorder.events == []
+
+    def test_missing_audio_backend_exits_cleanly(self, monkeypatch, caplog):
+        """No PortAudio must be a clear message, not a traceback."""
+        def explode(*_args, **_kwargs):
+            raise RuntimeError("audio output unavailable: PortAudio library not found")
+
+        monkeypatch.setattr(app, "GestureSynth", explode)
+        assert app.main(["--synth", "--dry-run", "--camera", "0"]) == 2
+        assert "audio output unavailable" in caplog.text
+
+
 class TestEndToEnd:
     """Runs the real loop over a video file, with MIDI going to the dry-run sink."""
 

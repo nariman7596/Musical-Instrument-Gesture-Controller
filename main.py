@@ -41,6 +41,7 @@ from src.midi_mapper import (
     load_config,
 )
 from src.midi_output import MidiUnavailableError, list_output_ports, open_output
+from src.synth import GestureSynth
 from src.visualizer import HudStats, Visualizer
 
 log = logging.getLogger("gesture-midi")
@@ -133,6 +134,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to hand_landmarker.task (downloaded and cached automatically)",
     )
 
+    audio = parser.add_argument_group("built-in synth")
+    audio.add_argument(
+        "--synth", action="store_true",
+        help="play the gestures through a built-in synth, so you can hear them "
+             "without a DAW (holds a drone note for the filter to shape)",
+    )
+    audio.add_argument(
+        "--drone", type=int, default=45, metavar="NOTE",
+        help="MIDI note the synth holds continuously; -1 for none (default: 45, A2)",
+    )
+    audio.add_argument(
+        "--synth-gain", type=float, default=0.28, help="synth output level (default: 0.28)",
+    )
+
     display = parser.add_argument_group("display")
     display.add_argument("--show", action="store_true", help="open the preview window with the overlay")
     display.add_argument(
@@ -168,6 +183,7 @@ class GestureController:
 
         self.muted = False
         self.running = True
+        self.synth: Optional[GestureSynth] = None
         self._frame_times: Deque[float] = deque(maxlen=60)
         self._latencies: Deque[float] = deque(maxlen=60)
         self._message_times: Deque[float] = deque(maxlen=200)
@@ -205,6 +221,16 @@ class GestureController:
             log.error("%s", exc)
             return 2
 
+        if args.synth:
+            try:
+                self.synth = GestureSynth(
+                    drone_note=None if args.drone < 0 else args.drone,
+                    gain=args.synth_gain,
+                ).start()
+            except RuntimeError as exc:
+                log.error("%s", exc)
+                return 2
+
         visualizer = Visualizer() if args.show else None
         camera = CameraSource(
             source, width=args.width, height=args.height, fps=args.fps,
@@ -235,6 +261,8 @@ class GestureController:
                     output.send(event)
                 except Exception:  # pragma: no cover - best effort on shutdown
                     break
+            if self.synth is not None:
+                self.synth.stop()
             camera.close()
             if tracker is not None:
                 tracker.close()
@@ -262,7 +290,7 @@ class GestureController:
             events = self.mapper.update(features, now=time.monotonic())
 
             if events and not self.muted:
-                output.send_all(events)
+                self._emit(events, output)
             now = time.monotonic()
             self._message_times.extend([now] * len(events))
             self._latencies.append((now - frame.timestamp) * 1000.0)
@@ -280,6 +308,12 @@ class GestureController:
             self._maybe_report()
 
     # -- helpers -----------------------------------------------------------
+    def _emit(self, events: List, output) -> None:
+        """Send events to the MIDI port and, if it is running, the built-in synth."""
+        output.send_all(events)
+        if self.synth is not None:
+            self.synth.handle_all(events)
+
     def _stats(self, hands: int) -> HudStats:
         return HudStats(
             fps=self._fps(),
@@ -314,10 +348,10 @@ class GestureController:
         elif char == "m":
             self.muted = not self.muted
             if self.muted:
-                output.send_all(self.mapper.panic())
+                self._emit(self.mapper.panic(), output)
             log.info("MIDI %s", "muted" if self.muted else "unmuted")
         elif char == "p":
-            output.send_all(self.mapper.panic())
+            self._emit(self.mapper.panic(), output)
             log.info("panic sent")
         elif char == "r":
             self._reload(output)
@@ -353,7 +387,7 @@ class GestureController:
     def _apply_config(self, new_config, output) -> None:
         # Release anything the old patch was holding before swapping it out.
         if not self.muted:
-            output.send_all(self.mapper.panic())
+            self._emit(self.mapper.panic(), output)
         if self.args.channel is not None:
             self.config = new_config
             self._override_channel(self.args.channel)
