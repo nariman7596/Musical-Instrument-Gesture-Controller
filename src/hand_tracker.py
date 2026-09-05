@@ -101,6 +101,44 @@ class TrackingResult:
         return len(self.observations)
 
 
+#: When to flip MediaPipe's handedness label, per backend.
+#:
+#: The two APIs disagree, and silently: feed both the same photograph and they
+#: name opposite hands.  The legacy API documents that it assumes a *mirrored*
+#: (selfie) input, so an un-mirrored feed needs the swap.  The Tasks API labels
+#: the anatomically correct hand for an *un-mirrored* frame, so it needs the
+#: opposite rule.  Verified against MediaPipe's own ``left_hands.jpg`` /
+#: ``right_hands.jpg`` samples in both mirror modes; see
+#: ``tests/test_hand_tracker.py``.
+#:
+#: Getting this wrong is quiet and infuriating: every right-hand mapping
+#: responds to the left hand and nothing looks broken.
+_SWAP_HANDEDNESS = {
+    "tasks": lambda mirrored: mirrored,
+    "legacy": lambda mirrored: not mirrored,
+}
+
+
+def resolve_handedness(label: str, backend: str, mirrored: bool) -> str:
+    """Normalise a raw MediaPipe handedness label to the player's real hand.
+
+    Args:
+        label: what MediaPipe reported (``"Left"``/``"Right"``, any case).
+        backend: ``"tasks"`` or ``"legacy"`` — they disagree, see
+            :data:`_SWAP_HANDEDNESS`.
+        mirrored: whether the frame was flipped horizontally before tracking.
+
+    Returns:
+        ``"left"`` or ``"right"``, from the player's point of view.
+    """
+    if backend not in _SWAP_HANDEDNESS:
+        raise ValueError(f"unknown backend {backend!r}")
+    side = "left" if str(label).lower().startswith("l") else "right"
+    if _SWAP_HANDEDNESS[backend](mirrored):
+        side = "right" if side == "left" else "left"
+    return side
+
+
 class HandTracker:
     """Detect hands in RGB frames and return normalised landmarks.
 
@@ -109,9 +147,9 @@ class HandTracker:
         min_detection_confidence / min_tracking_confidence: MediaPipe thresholds.
         model_path: explicit ``.task`` file (Tasks backend only).
         mirrored: set to ``True`` when the frames handed to :meth:`process` have
-            already been flipped horizontally (selfie view).  MediaPipe assumes a
-            mirrored image when it labels handedness, so an un-mirrored feed
-            needs its labels swapped — this flag does that for you.
+            already been flipped horizontally (selfie view).  Together with the
+            backend this decides whether the handedness labels need swapping —
+            see :data:`_SWAP_HANDEDNESS`.
         backend: ``"auto"``, ``"tasks"`` or ``"legacy"``.
     """
 
@@ -126,7 +164,6 @@ class HandTracker:
     ) -> None:
         self.max_hands = max_hands
         self.mirrored = mirrored
-        self._swap_handedness = not mirrored
         self._closed = False
 
         import mediapipe as mp  # imported lazily: heavy, and optional for tests
@@ -143,7 +180,10 @@ class HandTracker:
         else:
             raise ValueError(f"unknown backend {backend!r}; use auto, tasks or legacy")
         self.backend = chosen
-        log.info("hand tracker ready (backend=%s, max_hands=%d)", chosen, max_hands)
+        log.info(
+            "hand tracker ready (backend=%s, max_hands=%d, mirrored=%s)",
+            chosen, max_hands, mirrored,
+        )
 
     # -- backends ----------------------------------------------------------
     def _init_tasks(self, mp, model_path, detection_conf, tracking_conf) -> None:
@@ -220,9 +260,7 @@ class HandTracker:
         array = np.asarray(points, dtype=np.float64)
         if array.shape != (LANDMARK_COUNT, 3):
             raise ValueError(f"unexpected landmark shape {array.shape}")
-        side = "left" if str(label).lower().startswith("l") else "right"
-        if self._swap_handedness:
-            side = "right" if side == "left" else "left"
+        side = resolve_handedness(label, self.backend, self.mirrored)
         return HandObservation(handedness=side, score=score, landmarks=array)
 
     # -- lifecycle ---------------------------------------------------------

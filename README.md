@@ -44,15 +44,30 @@ control still feels like an instrument rather than a remote control. Run with
 
 ## Install
 
-Python 3.11 or newer.
-
 ```bash
 git clone https://github.com/nariman7596/Musical-Instrument-Gesture-Controller.git
 cd Musical-Instrument-Gesture-Controller
 
 python3 -m venv .venv && source .venv/bin/activate
+```
+
+Then pick the install set for your platform:
+
+```bash
+# macOS (Python 3.9-3.12)
+pip install -r requirements-macos.txt
+
+# Linux / Windows (Python 3.11+)
 pip install -r requirements.txt
 ```
+
+Two files because MediaPipe 1.x aborts on macOS inside the hand graph
+(`Check failed: service_ Service is unavailable`, from `DrishtiMetalHelper`):
+its macOS build wires Metal calculators into the graph without registering the
+Metal service, and no Python-level flag turns that off. MediaPipe 0.10.x and its
+`solutions` API do not have the problem, so that is what the macOS set pins —
+`src/hand_tracker.py` detects which API is installed and adapts. Both are
+covered by the test suite.
 
 The MediaPipe hand model (~7.5 MB) is downloaded and cached in
 `~/.cache/gesture-midi-controller/` the first time you run the controller. To
@@ -314,7 +329,7 @@ that a DAW has to chew through. With it, a still hand sends nothing at all.
 │   └── theremin.json          # wide, two-handed patch for a distant camera
 ├── notebooks/
 │   └── 01_landmark_exploration.ipynb
-└── tests/                     # 168 tests, no camera or MIDI hardware needed
+└── tests/                     # 182 tests, no camera or MIDI hardware needed
 ```
 
 ## Tests
@@ -324,8 +339,9 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The suite runs without a camera, without a MIDI device and (mostly) without
-MediaPipe: geometry is checked against a synthetic hand generator, and the pose
+The suite passes on both install sets (MediaPipe 0.10.21 with NumPy 1.26 and
+OpenCV 4, and MediaPipe 1.0.1 with NumPy 2.4 and OpenCV 5). It runs without a
+camera, without a MIDI device and (mostly) without MediaPipe: geometry is checked against a synthetic hand generator, and the pose
 classifiers are checked against landmarks extracted from real photographs. The
 end-to-end test drives `main.py` over a generated video clip with MIDI going to
 the dry-run sink, and skips itself if MediaPipe is not installed.
@@ -337,6 +353,8 @@ the dry-run sink, and skips itself if MediaPipe is not installed.
 | `could not open camera source 0` | try `--camera 1`; on macOS grant camera access in System Settings → Privacy & Security |
 | `no MIDI output ports found` | run without `--port` to create a virtual one, or enable the IAC Driver |
 | `could not initialise the system MIDI backend` | no CoreMIDI/ALSA available — use `--dry-run` to test the mapping |
+| `Check failed: service_ Service is unavailable` on macOS | MediaPipe 1.x and its Metal path; install `requirements-macos.txt` (MediaPipe 0.10.x) |
+| Left and right controls are swapped | the two MediaPipe APIs label handedness oppositely; make sure `src/hand_tracker.py` is current, and check the `--no-mirror` setting |
 | Preview window never appears | OpenCV has no GUI support (`opencv-python-headless`); install `opencv-python` |
 | Values jump around | raise `smoothing.window`, or widen the `release`/`threshold` gap |
 | Controls feel sluggish | lower `smoothing.window`, drop `--show`, or use `--max-hands 1` |

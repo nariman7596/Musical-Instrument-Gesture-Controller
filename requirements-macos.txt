@@ -1,0 +1,24 @@
+# macOS install set.
+#
+# MediaPipe 1.x crashes on macOS inside the hand graph:
+#
+#   graph_service.h:139] Check failed: service_ Service is unavailable.
+#   -[DrishtiMetalHelper initWithCalculatorContext:]
+#
+# The macOS build wires Metal calculators into the graph without registering
+# the Metal service, and it is not switchable from Python (BaseOptions already
+# requests the CPU delegate). MediaPipe 0.10.x and its solutions API do not
+# have the problem; src/hand_tracker.py detects and uses it automatically.
+#
+# 0.10.x constrains the rest of the stack: numpy < 2, protobuf < 5, and
+# opencv-contrib-python (which supersedes opencv-python and keeps GUI support
+# for --show), so this file replaces requirements.txt rather than extending it.
+#
+#     pip install -r requirements-macos.txt
+#
+# Needs Python 3.9-3.12; MediaPipe 0.10.x has no 3.13 wheels.
+
+mediapipe==0.10.21
+numpy==1.26.4
+opencv-contrib-python==4.11.0.86
+python-rtmidi==1.5.8
