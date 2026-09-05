@@ -261,6 +261,155 @@ class GateMapping(BaseMapping):
         return [MidiEvent("cc", self.channel, self.number, self.value_off, self.name)]
 
 
+#: Scales a hand position can be quantised to. Whatever the hand does, the note
+#: that comes out belongs to the scale — which is what makes waving your arm
+#: around sound like playing rather than like a siren.
+SCALES = {
+    "pentatonic_minor": (0, 3, 5, 7, 10),
+    "pentatonic_major": (0, 2, 4, 7, 9),
+    "major": (0, 2, 4, 5, 7, 9, 11),
+    "minor": (0, 2, 3, 5, 7, 8, 10),
+    "blues": (0, 3, 5, 6, 7, 10),
+    "dorian": (0, 2, 3, 5, 7, 9, 10),
+    "chromatic": tuple(range(12)),
+}
+
+
+def scale_notes(root: int, scale: str, octaves: float) -> List[int]:
+    """Every MIDI note of ``scale`` from ``root`` upwards, spanning ``octaves``."""
+    try:
+        degrees = SCALES[scale]
+    except KeyError:
+        raise ConfigError(
+            f"unknown scale {scale!r}; expected one of {', '.join(sorted(SCALES))}"
+        ) from None
+    count = max(int(round(len(degrees) * octaves)), 1)
+    notes = []
+    for step in range(count + 1):
+        octave, degree = divmod(step, len(degrees))
+        note = root + octave * 12 + degrees[degree]
+        if 0 <= note <= 127:
+            notes.append(note)
+    return notes or [max(0, min(127, root))]
+
+
+@dataclass
+class ScaleMapping(BaseMapping):
+    """Hand position -> a note from a musical scale: a playable lead voice.
+
+    This is the mapping that turns the controller from a bank of knobs into an
+    instrument. The driving feature picks a rung on a ladder of scale notes, a
+    gate feature decides when it should sound at all, and the note is re-struck
+    only when the hand crosses properly into the next rung.
+
+    That last part is the whole trick. Quantising on the nearest note alone
+    makes a hand resting on a boundary stutter between two pitches many times a
+    second; ``hysteresis`` requires the hand to move past the halfway point by a
+    margin before the note changes.
+    """
+
+    root: int = 57                          # A3
+    scale: str = "pentatonic_minor"
+    octaves: float = 2.0
+    velocity: int = 100
+    velocity_feature: Optional[str] = None
+    gate_feature: Optional[str] = None      # defaults to "the hand is tracked"
+    threshold: float = 0.5
+    release: float = 0.3
+    hysteresis: float = 0.2                 # extra travel needed, in note steps
+    input_range: Tuple[float, float] = (0.0, 1.0)
+    invert: bool = False
+
+    kind: str = field(init=False, default="scale")
+
+    def __post_init__(self) -> None:
+        self.notes = scale_notes(self.root, self.scale, self.octaves)
+        if self.gate_feature is None and "." in self.feature:
+            self.gate_feature = f"{self.feature.split('.', 1)[0]}.present"
+        super().__post_init__()
+
+    @property
+    def label(self) -> str:
+        return f"{self.scale.replace('_', ' ')} {self.notes[0]}-{self.notes[-1]}"
+
+    def reset(self) -> None:
+        super().reset()
+        self._trigger = SchmittTrigger(self.threshold, self.release)
+        self._index: Optional[int] = None
+        self._velocity_source = 1.0
+        self.sounding_note: Optional[int] = None
+
+    def _position(self, raw: float) -> float:
+        """Feature value -> continuous position along the ladder of notes."""
+        amount = normalise(raw, *self.input_range)
+        if self.invert:
+            amount = 1.0 - amount
+        return amount * (len(self.notes) - 1)
+
+    def _quantise(self, position: float) -> int:
+        """Nearest note index, holding the current one inside the dead band."""
+        if self._index is None:
+            return int(round(position))
+        if abs(position - self._index) <= 0.5 + self.hysteresis:
+            return self._index
+        return int(round(position))
+
+    def update(self, features: TMapping[str, float], now: float) -> List[MidiEvent]:
+        if self.velocity_feature is not None:
+            source = features.get(self.velocity_feature)
+            if source is not None:
+                self._velocity_source = clamp01(float(source))
+
+        raw = features.get(self.feature)
+        self.tracked = raw is not None
+        if not self.enabled:
+            return []
+
+        gate_value = features.get(self.gate_feature) if self.gate_feature else None
+        if gate_value is None:
+            gate_value = 1.0 if raw is not None else 0.0
+        open_gate = self._trigger.update(float(gate_value))
+
+        if not open_gate:
+            self.active = False
+            return self._release()
+
+        if raw is None:                       # gate open but no fresh position
+            return []
+
+        position = self._position(float(raw))
+        self.display = position / max(len(self.notes) - 1, 1)
+        index = self._quantise(position)
+        note = self.notes[max(0, min(index, len(self.notes) - 1))]
+
+        if note == self.sounding_note:
+            return []
+
+        events = self._release()
+        self._index = index
+        self.sounding_note = note
+        self.active = True
+        self.last_value = note
+        self._last_sent_at = now
+        velocity = self.velocity
+        if self.velocity_feature is not None:
+            velocity = max(1, int(round(self.velocity * self._velocity_source)))
+        events.append(MidiEvent("note_on", self.channel, note, velocity, self.name))
+        return events
+
+    def _release(self) -> List[MidiEvent]:
+        if self.sounding_note is None:
+            return []
+        note, self.sounding_note = self.sounding_note, None
+        return [MidiEvent("note_off", self.channel, note, 0, self.name)]
+
+    def panic(self) -> List[MidiEvent]:
+        self.active = False
+        self._trigger.reset(False)
+        self._index = None
+        return self._release()
+
+
 @dataclass
 class NoteMapping(BaseMapping):
     """Pose gate -> note on / note off (trigger a drum pad or a sample)."""
@@ -330,6 +479,10 @@ _GATE_KEYS = _COMMON_KEYS + ("cc", "number", "threshold", "release", "value_on",
 _NOTE_KEYS = _COMMON_KEYS + (
     "note", "number", "velocity", "threshold", "release", "velocity_feature", "retrigger",
 )
+_SCALE_KEYS = _COMMON_KEYS + (
+    "root", "scale", "octaves", "velocity", "velocity_feature", "gate_feature",
+    "threshold", "release", "hysteresis", "input_range", "invert",
+)
 
 #: Accepted ``type`` spellings -> canonical kind.
 TYPE_ALIASES = {
@@ -346,6 +499,9 @@ TYPE_ALIASES = {
     "aftertouch": "aftertouch",
     "pressure": "aftertouch",
     "channel_pressure": "aftertouch",
+    "scale": "scale",
+    "pitch": "scale",
+    "lead": "scale",
 }
 
 
@@ -410,6 +566,40 @@ def _build_mapping(entry: TMapping[str, Any], index: int, default_channel: int) 
             raise ConfigError(f"{context}: 'curve' must be positive, got {mapping.curve}")
         return mapping
 
+    if kind == "scale":
+        _check_keys(entry, _SCALE_KEYS, context)
+        root = _get_int(entry, "root", 57, context)
+        if not 0 <= root <= 127:
+            raise ConfigError(f"{context}: 'root' must be between 0 and 127, got {root}")
+        octaves = _get_number(entry, "octaves", 2.0, context)
+        if octaves <= 0:
+            raise ConfigError(f"{context}: 'octaves' must be positive, got {octaves}")
+        threshold = _get_number(entry, "threshold", 0.5, context)
+        release = _get_number(entry, "release", 0.3, context)
+        if release > threshold:
+            raise ConfigError(
+                f"{context}: 'release' ({release}) must not be above 'threshold' ({threshold})"
+            )
+        scale = str(entry.get("scale", "pentatonic_minor"))
+        if scale not in SCALES:
+            raise ConfigError(
+                f"{context}: unknown scale {scale!r}; expected one of {', '.join(sorted(SCALES))}"
+            )
+        return ScaleMapping(
+            root=root,
+            scale=scale,
+            octaves=octaves,
+            velocity=_get_int(entry, "velocity", 100, context),
+            velocity_feature=entry.get("velocity_feature"),
+            gate_feature=entry.get("gate_feature"),
+            threshold=threshold,
+            release=release,
+            hysteresis=_get_number(entry, "hysteresis", 0.2, context),
+            input_range=_get_range(entry, "input_range", (0.0, 1.0), context),
+            invert=bool(entry.get("invert", False)),
+            **common,
+        )
+
     # Both remaining types are gates, and both need a valid hysteresis band.
     # Validated before construction: the Schmitt trigger rejects an inverted band
     # with an exception aimed at a programmer, not at someone editing JSON.
@@ -471,12 +661,26 @@ class SmoothingSettings:
 
 
 @dataclass
+class SynthSettings:
+    """The ``"synth"`` block: defaults for the built-in monitor synth.
+
+    A patch knows whether it needs a drone. One built from control changes does
+    (there must be something for the filter to shape); a playable one does not,
+    because it makes its own notes. Command-line flags still win.
+    """
+
+    drone: Optional[int] = 45
+    gain: float = 0.28
+
+
+@dataclass
 class ControllerConfig:
     """A parsed mapping file."""
 
     midi: MidiSettings = field(default_factory=MidiSettings)
     smoothing: SmoothingSettings = field(default_factory=SmoothingSettings)
     calibration: FeatureCalibration = field(default_factory=FeatureCalibration)
+    synth: SynthSettings = field(default_factory=SynthSettings)
     mappings: List[BaseMapping] = field(default_factory=list)
     path: Optional[Path] = None
 
@@ -495,7 +699,11 @@ def parse_config(data: TMapping[str, Any], path: Optional[Path] = None) -> Contr
     """Validate a decoded JSON document and build a :class:`ControllerConfig`."""
     if not isinstance(data, dict):
         raise ConfigError("the mapping file must contain a JSON object")
-    _check_keys(data, ("version", "name", "description", "midi", "smoothing", "calibration", "mappings"), "config")
+    _check_keys(
+        data,
+        ("version", "name", "description", "midi", "smoothing", "calibration", "synth", "mappings"),
+        "config",
+    )
 
     version = data.get("version", CONFIG_VERSION)
     if version != CONFIG_VERSION:
@@ -526,6 +734,14 @@ def parse_config(data: TMapping[str, Any], path: Optional[Path] = None) -> Contr
     except ValueError as exc:
         raise ConfigError(f"config.calibration: {exc}") from exc
 
+    synth_block = data.get("synth", {}) or {}
+    _check_keys(synth_block, ("drone", "gain"), "config.synth")
+    drone = _get_int(synth_block, "drone", 45, "config.synth")
+    synth = SynthSettings(
+        drone=None if drone < 0 else drone,
+        gain=_get_number(synth_block, "gain", 0.28, "config.synth"),
+    )
+
     raw_mappings = data.get("mappings")
     if not isinstance(raw_mappings, list) or not raw_mappings:
         raise ConfigError("config: 'mappings' must be a non-empty list")
@@ -542,7 +758,8 @@ def parse_config(data: TMapping[str, Any], path: Optional[Path] = None) -> Contr
                     feature,
                 )
     return ControllerConfig(midi=midi, smoothing=smoothing, calibration=calibration,
-                            mappings=mappings, path=Path(path) if path else None)
+                            synth=synth, mappings=mappings,
+                            path=Path(path) if path else None)
 
 
 def load_config(path) -> ControllerConfig:

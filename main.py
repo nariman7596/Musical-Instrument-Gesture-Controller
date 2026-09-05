@@ -141,11 +141,13 @@ def build_parser() -> argparse.ArgumentParser:
              "without a DAW (holds a drone note for the filter to shape)",
     )
     audio.add_argument(
-        "--drone", type=int, default=45, metavar="NOTE",
-        help="MIDI note the synth holds continuously; -1 for none (default: 45, A2)",
+        "--drone", type=int, default=None, metavar="NOTE",
+        help="MIDI note the synth holds continuously; -1 for none. Overrides the "
+             "mapping file's 'synth' block (default: 45 for control patches, "
+             "none for playable ones)",
     )
     audio.add_argument(
-        "--synth-gain", type=float, default=0.28, help="synth output level (default: 0.28)",
+        "--synth-gain", type=float, default=None, help="synth output level (default: 0.28)",
     )
 
     display = parser.add_argument_group("display")
@@ -222,10 +224,14 @@ class GestureController:
             return 2
 
         if args.synth:
+            # The patch chooses whether a drone makes sense; the flags still win.
+            drone = self.config.synth.drone
+            if args.drone is not None:
+                drone = None if args.drone < 0 else args.drone
             try:
                 self.synth = GestureSynth(
-                    drone_note=None if args.drone < 0 else args.drone,
-                    gain=args.synth_gain,
+                    drone_note=drone,
+                    gain=args.synth_gain if args.synth_gain is not None else self.config.synth.gain,
                 ).start()
             except RuntimeError as exc:
                 log.error("%s", exc)

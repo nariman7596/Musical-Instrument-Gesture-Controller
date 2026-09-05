@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "name": "Playable lead",
+  "description": "An instrument rather than a control panel: the right hand plays notes from a pentatonic scale, the left hand shapes and swells them. Made for --synth.",
+  "midi": {
+    "channel": 1,
+    "port_name": "Gesture MIDI Controller"
+  },
+  "smoothing": {
+    "window": 4,
+    "reset_after": 20
+  },
+  "synth": {
+    "drone": -1,
+    "gain": 0.3
+  },
+  "mappings": [
+    {
+      "name": "Lead",
+      "comment": "Right hand across the frame picks the note; raise it to play louder. Nothing sounds while the hand is out of frame.",
+      "feature": "right.x",
+      "type": "scale",
+      "root": 57,
+      "scale": "pentatonic_minor",
+      "octaves": 2,
+      "velocity": 105,
+      "velocity_feature": "right.height",
+      "gate_feature": "right.present",
+      "hysteresis": 0.25,
+      "input_range": [0.12, 0.88],
+      "smoothing": 3
+    },
+    {
+      "name": "Brightness",
+      "comment": "Left hand height opens the filter — the expression pedal of this instrument.",
+      "feature": "left.height",
+      "type": "cc",
+      "cc": 74,
+      "input_range": [0.1, 0.85],
+      "curve": 1.3,
+      "deadband": 1
+    },
+    {
+      "name": "Swell",
+      "comment": "Pinch the left hand to fade out.",
+      "feature": "left.pinch",
+      "type": "cc",
+      "cc": 7,
+      "invert": true,
+      "output_range": [30, 127],
+      "deadband": 1
+    },
+    {
+      "name": "Resonance",
+      "feature": "left.openness",
+      "type": "cc",
+      "cc": 71,
+      "input_range": [0.1, 0.95],
+      "deadband": 2
+    },
+    {
+      "name": "Vibrato",
+      "comment": "Left peace sign adds a wobble.",
+      "feature": "left.peace",
+      "type": "gate",
+      "cc": 1,
+      "threshold": 0.7,
+      "release": 0.3,
+      "value_on": 100,
+      "value_off": 0
+    },
+    {
+      "name": "Sustain Pedal",
+      "comment": "Left fist holds notes so they stack into a chord.",
+      "feature": "left.fist",
+      "type": "gate",
+      "cc": 64,
+      "threshold": 0.65,
+      "release": 0.35
+    },
+    {
+      "name": "Reverb Send",
+      "feature": "both.hands_distance",
+      "type": "cc",
+      "cc": 91,
+      "deadband": 2
+    }
+  ]
+}

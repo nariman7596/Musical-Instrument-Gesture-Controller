@@ -115,6 +115,26 @@ python main.py --dry-run --show
 `--camera` takes a webcam index (`0`, `1`, ...), an RTSP/HTTP URL, or the path to
 a video file — handy for developing against a recording instead of your own arm.
 
+### Playing it like an instrument
+
+`config/play.json` maps the right hand's position to **notes of a pentatonic
+scale**, so moving your hand plays a melody rather than only shaping a tone:
+
+```bash
+python main.py --camera 0 --show --synth --config config/play.json
+```
+
+Right hand across the frame picks the note (higher to the right), raise it to
+play louder. Left hand height opens the filter, pinch it to fade out, make a
+fist to hold notes into a chord, peace sign for vibrato. Take the right hand out
+of frame and it stops.
+
+The notes are quantised to a scale, so a wandering hand still lands in key — and
+a small dead band around each note stops a shaky hand stuttering between two
+pitches. Set `scale` to any of `pentatonic_minor`, `pentatonic_major`, `major`,
+`minor`, `blues`, `dorian` or `chromatic`, `root` to where it starts, and
+`octaves` to how far the ladder reaches.
+
 ### Hearing it without a DAW
 
 A control change only *shapes* a sound that something else is playing, so the
@@ -188,8 +208,9 @@ the right hand shapes the sound, the left hand handles transport.
 | One hand above the other | pitch bend | `both.hands_vertical_delta` |
 | Horizontal hand spread | CC 77 stereo width | `both.hands_spread` |
 
-`config/theremin.json` is a second preset for a camera mounted further away
-(the ceiling V380): fewer, wider gestures and heavier smoothing.
+Two more presets ship with it: `config/play.json` turns it into a playable
+instrument (see above), and `config/theremin.json` is built for a camera mounted
+further away (the ceiling V380) — fewer, wider gestures and heavier smoothing.
 
 ---
 
@@ -224,6 +245,7 @@ ignored, keeping the previous patch alive.
 | `type` | Sends | Extra fields |
 | --- | --- | --- |
 | `cc` | control change 0-127 | `cc` (required) |
+| `scale` | notes of a musical scale, monophonic | `root`, `scale`, `octaves`, `velocity`, `gate_feature`, `hysteresis` |
 | `gate` | control change on/off | `cc`, `value_on`, `value_off`, `threshold`, `release` |
 | `note` | note on / note off | `note`, `velocity`, `velocity_feature`, `retrigger`, `threshold`, `release` |
 | `pitch_bend` | 14-bit pitch bend | — |
@@ -250,6 +272,17 @@ ignored, keeping the previous patch alive.
 | `curve` | `1.0` | response curve; `> 1` gives finer control at the bottom |
 | `deadband` | `1` (`64` for bend) | minimum change worth sending — this is what keeps a still hand silent |
 | `rate_limit_hz` | none | cap the message rate for a busy control |
+
+### Scale mappings (`scale`)
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `root` | `57` (A3) | lowest note of the ladder |
+| `scale` | `pentatonic_minor` | which notes are reachable at all |
+| `octaves` | `2` | how far the ladder reaches |
+| `gate_feature` | `<hand>.present` | what decides when it sounds |
+| `hysteresis` | `0.2` | extra travel needed to change note, in note steps |
+| `velocity_feature` | — | feature scaling how hard each note is struck |
 
 ### Gates and notes (`gate`, `note`)
 
@@ -354,10 +387,11 @@ that a DAW has to chew through. With it, a still hand sends nothing at all.
 │   └── visualizer.py          # skeleton + CC meter overlay
 ├── config/
 │   ├── default_mapping.json   # the studio patch described above
+│   ├── play.json              # playable pentatonic lead, for --synth
 │   └── theremin.json          # wide, two-handed patch for a distant camera
 ├── notebooks/
 │   └── 01_landmark_exploration.ipynb
-└── tests/                     # 205 tests, no camera, MIDI or audio hardware needed
+└── tests/                     # 233 tests, no camera, MIDI or audio hardware needed
 ```
 
 ## Tests
@@ -388,6 +422,7 @@ the dry-run sink, and skips itself if MediaPipe is not installed.
 | Controls feel sluggish | lower `smoothing.window`, drop `--show`, or use `--max-hands 1` |
 | Gestures never trigger | run `--debug-features`, read the real values, adjust `calibration` |
 | Everything works but there is no sound | expected — CCs only shape a sound that already exists. Add `--synth`, or hold notes on a keyboard while gesturing |
+| One droning note, no melody | that patch only sends control changes; use `--config config/play.json` to play notes with your hand |
 | `audio output unavailable: PortAudio library not found` | Linux only; `sudo apt install libportaudio2`. The macOS and Windows wheels bundle it |
 | RTSP stream stutters | try `--rtsp-transport udp`, or lower the camera's resolution |
 
