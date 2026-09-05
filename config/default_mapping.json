@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "name": "Default studio patch",
+  "description": "Right hand shapes the sound, left hand handles transport, both hands bend and widen it.",
+  "midi": {
+    "channel": 1,
+    "port_name": "Gesture MIDI Controller"
+  },
+  "smoothing": {
+    "window": 5,
+    "reset_after": 30
+  },
+  "mappings": [
+    {
+      "name": "Filter Cutoff",
+      "comment": "Raise the right hand to open the filter.",
+      "feature": "right.height",
+      "type": "cc",
+      "cc": 74,
+      "input_range": [0.15, 0.9],
+      "curve": 1.4,
+      "deadband": 1
+    },
+    {
+      "name": "Resonance",
+      "comment": "Move the right hand across the frame.",
+      "feature": "right.x",
+      "type": "cc",
+      "cc": 71,
+      "input_range": [0.15, 0.85],
+      "deadband": 2
+    },
+    {
+      "name": "Master Volume",
+      "comment": "Pinch thumb and index together to fade out.",
+      "feature": "right.pinch",
+      "type": "cc",
+      "cc": 7,
+      "invert": true,
+      "output_range": [20, 127],
+      "deadband": 1
+    },
+    {
+      "name": "Reverb Send",
+      "comment": "Open the right hand for more space.",
+      "feature": "right.openness",
+      "type": "cc",
+      "cc": 91,
+      "input_range": [0.1, 0.95],
+      "deadband": 2
+    },
+    {
+      "name": "Pan",
+      "comment": "Roll the right palm left/right. 0.5 is centre, hence the mid output.",
+      "feature": "right.roll",
+      "type": "cc",
+      "cc": 10,
+      "input_range": [0.15, 0.85],
+      "deadband": 2,
+      "smoothing": 8
+    },
+    {
+      "name": "Sustain Pedal",
+      "comment": "Left fist holds the pedal down, opening the hand releases it.",
+      "feature": "left.fist",
+      "type": "gate",
+      "cc": 64,
+      "threshold": 0.65,
+      "release": 0.35
+    },
+    {
+      "name": "Sample Trigger",
+      "comment": "Point the left index finger up to fire C1 (drum pad on most kits).",
+      "feature": "left.point_up",
+      "type": "note",
+      "note": 36,
+      "velocity": 110,
+      "velocity_feature": "left.height",
+      "threshold": 0.7,
+      "release": 0.3,
+      "smoothing": 3
+    },
+    {
+      "name": "Modulation",
+      "comment": "Left peace sign switches the mod wheel in.",
+      "feature": "left.peace",
+      "type": "gate",
+      "cc": 1,
+      "threshold": 0.7,
+      "release": 0.3,
+      "value_on": 110,
+      "value_off": 0
+    },
+    {
+      "name": "Chorus Depth",
+      "comment": "Theremin-style: pull both hands apart.",
+      "feature": "both.hands_distance",
+      "type": "cc",
+      "cc": 93,
+      "deadband": 2
+    },
+    {
+      "name": "Pitch Bend",
+      "comment": "Raise one hand above the other. Hands level = no bend.",
+      "feature": "both.hands_vertical_delta",
+      "type": "pitch_bend",
+      "input_range": [0.0, 1.0],
+      "deadband": 96,
+      "smoothing": 7
+    },
+    {
+      "name": "Stereo Width",
+      "comment": "Horizontal distance between the wrists.",
+      "feature": "both.hands_spread",
+      "type": "cc",
+      "cc": 77,
+      "deadband": 2
+    },
+    {
+      "name": "Aftertouch (off)",
+      "comment": "Example of channel pressure from hand distance to the lens. Enable to try it.",
+      "feature": "right.depth",
+      "type": "aftertouch",
+      "enabled": false,
+      "deadband": 3
+    }
+  ]
+}

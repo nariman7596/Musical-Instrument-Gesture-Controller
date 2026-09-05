@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "name": "Theremin (ceiling camera)",
+  "description": "Full-body, two-handed control for a camera mounted above the player: distance between the hands is the main axis, and everything is smoothed harder because a distant camera is noisier.",
+  "midi": {
+    "channel": 1,
+    "port_name": "Gesture Theremin"
+  },
+  "smoothing": {
+    "window": 9,
+    "reset_after": 45
+  },
+  "calibration": {
+    "palm_size": [0.03, 0.20],
+    "hands_distance": [0.10, 1.20],
+    "hands_spread": [0.05, 1.10]
+  },
+  "mappings": [
+    {
+      "name": "Pitch",
+      "comment": "Classic theremin gesture: pull the hands apart to bend up.",
+      "feature": "both.hands_distance",
+      "type": "pitch_bend",
+      "deadband": 128,
+      "smoothing": 11
+    },
+    {
+      "name": "Volume",
+      "comment": "Left hand height, like the volume loop on a real theremin.",
+      "feature": "left.height",
+      "type": "cc",
+      "cc": 7,
+      "input_range": [0.1, 0.8],
+      "curve": 1.5,
+      "deadband": 2
+    },
+    {
+      "name": "Filter Cutoff",
+      "feature": "right.height",
+      "type": "cc",
+      "cc": 74,
+      "input_range": [0.1, 0.8],
+      "deadband": 2
+    },
+    {
+      "name": "Reverb Send",
+      "comment": "Stand wide for a bigger room.",
+      "feature": "both.hands_spread",
+      "type": "cc",
+      "cc": 91,
+      "deadband": 3
+    },
+    {
+      "name": "Note Gate",
+      "comment": "An open right palm sounds the drone; close it to stop.",
+      "feature": "right.open_palm",
+      "type": "note",
+      "note": 60,
+      "velocity": 100,
+      "threshold": 0.7,
+      "release": 0.35
+    },
+    {
+      "name": "Sustain Pedal",
+      "feature": "left.fist",
+      "type": "gate",
+      "cc": 64,
+      "threshold": 0.7,
+      "release": 0.35
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+# Byte-compiled / optimised files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing / tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Downloaded model assets (fetched automatically on first run)
+*.task
+models/
+
+# Recordings and captures kept out of the repository
+*.mov
+*.mp4
+*.avi
+!docs/assets/*.gif
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp

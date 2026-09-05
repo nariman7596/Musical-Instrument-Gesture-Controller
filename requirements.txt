@@ -1,0 +1,18 @@
+# Runtime dependencies, pinned to the versions this project is tested against.
+# All four have Apple Silicon wheels (macOS 13+ for OpenCV 5).
+
+# Hand landmark detection. MediaPipe 1.x exposes only the Tasks API, and the
+# hand model is downloaded and cached on first run.
+# MediaPipe 0.10.x also works (src/hand_tracker.py falls back to the legacy
+# mediapipe.solutions API), but 1.0.1 is what CI exercises.
+mediapipe==1.0.1
+
+# Frame capture, colour conversion and the preview overlay.
+# Use opencv-python-headless instead if you never pass --show.
+opencv-python==5.0.0.93
+
+numpy==2.4.6
+
+# MIDI output. python-rtmidi is called directly rather than through mido: it is
+# one less layer on the hot path, and CoreMIDI is what it talks to on macOS.
+python-rtmidi==1.5.8
