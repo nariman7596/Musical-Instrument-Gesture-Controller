@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "name": "Ensemble",
+  "description": "Both hands playing different parts: the left hand holds down an arpeggiated chord progression while the right plays the melody over it, with speed, spread and finger poses shaping the sound. Made for --synth.",
+  "midi": { "channel": 1, "port_name": "Gesture MIDI Controller" },
+  "smoothing": { "window": 4, "reset_after": 20 },
+  "synth": { "drone": -1, "gain": 0.26 },
+  "mappings": [
+    {
+      "name": "Melody",
+      "comment": "Right hand across the frame plays the tune. Move faster and it strikes harder.",
+      "feature": "right.x",
+      "type": "scale",
+      "root": 69,
+      "scale": "pentatonic_minor",
+      "octaves": 2,
+      "velocity": 110,
+      "velocity_feature": "right.speed",
+      "gate_feature": "right.present",
+      "hysteresis": 0.25,
+      "input_range": [0.12, 0.88],
+      "smoothing": 3
+    },
+    {
+      "name": "Arpeggio",
+      "comment": "Left hand picks the chord; raise it to play the arpeggio faster. Same key as the melody.",
+      "feature": "left.x",
+      "type": "arpeggio",
+      "root": 45,
+      "scale": "minor",
+      "span": 5,
+      "size": 3,
+      "octaves": 2,
+      "pattern": "updown",
+      "rate_feature": "left.height",
+      "rate_range": [2.0, 9.0],
+      "gate_length": 0.7,
+      "velocity": 78,
+      "gate_feature": "left.present",
+      "input_range": [0.1, 0.9]
+    },
+    {
+      "name": "Brightness",
+      "comment": "Raise the right hand to open the filter.",
+      "feature": "right.height",
+      "type": "cc",
+      "cc": 74,
+      "input_range": [0.1, 0.9],
+      "curve": 1.3,
+      "deadband": 1
+    },
+    {
+      "name": "Resonance",
+      "comment": "Spread the right fingers for more bite.",
+      "feature": "right.finger_spread",
+      "type": "cc",
+      "cc": 71,
+      "input_range": [0.15, 0.9],
+      "deadband": 2
+    },
+    {
+      "name": "Volume",
+      "comment": "Pinch the right hand to fade out.",
+      "feature": "right.pinch",
+      "type": "cc",
+      "cc": 7,
+      "invert": true,
+      "output_range": [35, 127],
+      "deadband": 1
+    },
+    {
+      "name": "Pan",
+      "feature": "right.roll",
+      "type": "cc",
+      "cc": 10,
+      "input_range": [0.2, 0.8],
+      "deadband": 2,
+      "smoothing": 8
+    },
+    {
+      "name": "Vibrato",
+      "comment": "Left peace sign adds a wobble.",
+      "feature": "left.peace",
+      "type": "gate",
+      "cc": 1,
+      "threshold": 0.7,
+      "release": 0.3,
+      "value_on": 100,
+      "value_off": 0
+    },
+    {
+      "name": "Sustain",
+      "comment": "Left fist holds everything down into a wash.",
+      "feature": "left.fist",
+      "type": "gate",
+      "cc": 64,
+      "threshold": 0.65,
+      "release": 0.35
+    },
+    {
+      "name": "Reverb Send",
+      "comment": "Pull the hands apart for a bigger room.",
+      "feature": "both.hands_distance",
+      "type": "cc",
+      "cc": 91,
+      "deadband": 2
+    }
+  ]
+}

@@ -100,6 +100,8 @@ class FeatureCalibration:
     hands_vertical_delta: tuple = (-0.45, 0.45)
     #: Horizontal wrist spread in aspect-corrected image units (two-hand).
     hands_spread: tuple = (0.05, 0.95)
+    #: Wrist speed in image units per second -> the ``speed`` feature.
+    hand_speed: tuple = (0.05, 1.60)
 
     #: A finger counts as "extended" above this normalised value ...
     extended_threshold: float = 0.65
@@ -334,6 +336,11 @@ def hand_features(
         "open_palm": float(all(extended) and fingers["thumb"] >= 0.5),
         "point_up": float(extended[0] and all(curled[1:]) and index_points_up),
         "peace": float(extended[0] and extended[1] and curled[2] and curled[3]),
+        # How many fingers are up, as 0.0-1.0 in fifths. Discrete enough to
+        # choose between things (a chord, an octave, a pattern) with one hand.
+        "finger_count": sum(
+            1 for value in fingers.values() if value >= calib.extended_threshold
+        ) / 5.0,
     }
     features.update({f"{name}_extension": value for name, value in fingers.items()})
     return features
@@ -411,6 +418,8 @@ FEATURE_DOCS = {
     "<hand>.open_palm": "gate: all fingers extended",
     "<hand>.point_up": "gate: index finger pointing up, others curled",
     "<hand>.peace": "gate: index + middle extended, ring + pinky curled",
+    "<hand>.finger_count": "extended fingers, in fifths (0.0, 0.2 ... 1.0)",
+    "<hand>.speed": "how fast the hand is moving (needs MotionTracker)",
     "<hand>.thumb_extension": "thumb extension, 0.0 = tucked",
     "<hand>.index_extension": "index extension, 0.0 = curled",
     "<hand>.middle_extension": "middle extension, 0.0 = curled",
@@ -421,6 +430,65 @@ FEATURE_DOCS = {
     "both.hands_vertical_delta": "vertical wrist offset, 0.5 = level",
     "both.hands_spread": "horizontal wrist spread (stereo width)",
 }
+
+
+class MotionTracker:
+    """Adds features that need memory of where the hands were a frame ago.
+
+    Everything else in this module is a pure function of one frame, which keeps
+    it testable — but *speed* is what separates a hand placed on a note from a
+    hand thrown at it, and that needs the previous frame. Keeping the state in
+    one small object leaves the rest of the module pure.
+    """
+
+    def __init__(self, calib: FeatureCalibration = DEFAULT_CALIBRATION, smoothing: float = 0.4):
+        self.calib = calib
+        self.smoothing = smoothing
+        self._previous: Dict[str, tuple] = {}
+        self._speed: Dict[str, float] = {}
+
+    def update(
+        self,
+        hands: Mapping[str, Optional[np.ndarray]],
+        vector: Dict[str, float],
+        timestamp: float,
+        aspect: float = 1.0,
+    ) -> Dict[str, float]:
+        """Add ``<hand>.speed`` to ``vector`` in place, and return it."""
+        for side in ("left", "right"):
+            landmarks = hands.get(side)
+            if landmarks is None:
+                self._previous.pop(side, None)
+                self._speed.pop(side, None)
+                continue
+
+            wrist = metric_landmarks(as_landmark_array(landmarks), aspect)[WRIST]
+            previous = self._previous.get(side)
+            self._previous[side] = (wrist, timestamp)
+            if previous is None:
+                continue
+
+            last_wrist, last_time = previous
+            elapsed = timestamp - last_time
+            if not 1e-4 < elapsed < 1.0:      # a stale or duplicated frame
+                continue
+
+            raw = float(np.linalg.norm(wrist - last_wrist)) / elapsed
+            # Speed is spiky by nature; smooth it or every mapping fed from it
+            # fires on single-frame noise.
+            smoothed = self._speed.get(side)
+            value = raw if smoothed is None else smoothed + (raw - smoothed) * self.smoothing
+            self._speed[side] = value
+            vector[f"{side}.speed"] = normalise(value, *self.calib.hand_speed)
+        return vector
+
+    def reset(self) -> None:
+        self._previous.clear()
+        self._speed.clear()
+
+
+#: Features supplied by :class:`MotionTracker` rather than by a single frame.
+MOTION_FEATURES = ("left.speed", "right.speed")
 
 
 def feature_names() -> Sequence[str]:

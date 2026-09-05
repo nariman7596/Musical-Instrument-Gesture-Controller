@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,13 +81,23 @@ def _get_int(data: TMapping[str, Any], key: str, default: Optional[int], context
 
 
 def _get_range(
-    data: TMapping[str, Any], key: str, default: Tuple[float, float], context: str
+    data: TMapping[str, Any],
+    key: str,
+    default: Tuple[float, float],
+    context: str,
+    allow_equal: bool = False,
 ) -> Tuple[float, float]:
+    """Read a ``[low, high]`` pair.
+
+    A zero-width *input* range is always a mistake — it maps every gesture onto
+    one value — so it is rejected. A zero-width *rate* range is not: it is how
+    you ask for a fixed arpeggio speed.
+    """
     value = data.get(key, default)
     if not isinstance(value, (list, tuple)) or len(value) != 2:
         raise ConfigError(f"{context}: {key!r} must be [low, high], got {value!r}")
     low, high = float(value[0]), float(value[1])
-    if low == high:
+    if low == high and not allow_equal:
         raise ConfigError(f"{context}: {key!r} low and high must differ")
     return low, high
 
@@ -293,6 +304,250 @@ def scale_notes(root: int, scale: str, octaves: float) -> List[int]:
     return notes or [max(0, min(127, root))]
 
 
+def chord_from_scale(
+    root: int, scale: str, degree: int, size: int = 3, step: int = 2
+) -> List[int]:
+    """Stack ``size`` notes from ``scale``, ``step`` scale degrees apart.
+
+    Stacking *within the scale* rather than by fixed intervals is what keeps
+    every chord in key: the third of a chord is whatever the scale's third is,
+    so the harmony follows the mode instead of fighting it. ``step=2`` gives
+    ordinary triads, ``size=4`` adds the seventh.
+    """
+    try:
+        degrees = SCALES[scale]
+    except KeyError:
+        raise ConfigError(
+            f"unknown scale {scale!r}; expected one of {', '.join(sorted(SCALES))}"
+        ) from None
+    notes = []
+    for position in range(size):
+        octave, index = divmod(degree + position * step, len(degrees))
+        note = root + octave * 12 + degrees[index]
+        if 0 <= note <= 127:
+            notes.append(note)
+    return notes
+
+
+def _quantise(position: float, current: Optional[int], hysteresis: float) -> int:
+    """Nearest step, holding the current one inside a dead band.
+
+    Without the dead band a hand resting on a boundary flips between two values
+    many times a second, which is unplayable — as chords, it is unbearable.
+    """
+    if current is None:
+        return int(round(position))
+    if abs(position - current) <= 0.5 + hysteresis:
+        return current
+    return int(round(position))
+
+
+@dataclass
+class HarmonyMapping(BaseMapping):
+    """Shared machinery for mappings that pick a scale degree with a hand.
+
+    Subclasses decide what to *do* with the degree: sound it as a chord, or
+    walk it as an arpeggio.
+    """
+
+    root: int = 48
+    scale: str = "minor"
+    span: int = 7                            # how many degrees the hand reaches
+    size: int = 3                            # notes per chord
+    step: int = 2                            # scale degrees between them
+    velocity: int = 90
+    velocity_feature: Optional[str] = None
+    gate_feature: Optional[str] = None
+    threshold: float = 0.5
+    release: float = 0.3
+    hysteresis: float = 0.25
+    input_range: Tuple[float, float] = (0.0, 1.0)
+    invert: bool = False
+
+    def __post_init__(self) -> None:
+        if self.gate_feature is None and "." in self.feature:
+            self.gate_feature = f"{self.feature.split('.', 1)[0]}.present"
+        super().__post_init__()
+
+    def reset(self) -> None:
+        super().reset()
+        self._trigger = SchmittTrigger(self.threshold, self.release)
+        self._degree: Optional[int] = None
+        self._velocity_source = 1.0
+        self.sounding: List[int] = []
+
+    def _resolve(self, features: TMapping[str, float]):
+        """Return ``(gate_open, degree_or_None)`` for this frame."""
+        if self.velocity_feature is not None:
+            source = features.get(self.velocity_feature)
+            if source is not None:
+                self._velocity_source = clamp01(float(source))
+
+        raw = features.get(self.feature)
+        self.tracked = raw is not None
+
+        gate_value = features.get(self.gate_feature) if self.gate_feature else None
+        if gate_value is None:
+            gate_value = 1.0 if raw is not None else 0.0
+        open_gate = self._trigger.update(float(gate_value))
+        if not open_gate or raw is None:
+            return open_gate, None
+
+        amount = normalise(float(raw), *self.input_range)
+        if self.invert:
+            amount = 1.0 - amount
+        position = amount * max(self.span - 1, 1)
+        self.display = amount
+        return True, _quantise(position, self._degree, self.hysteresis)
+
+    def _velocity(self) -> int:
+        if self.velocity_feature is None:
+            return self.velocity
+        return max(1, int(round(self.velocity * self._velocity_source)))
+
+    def _release_all(self) -> List[MidiEvent]:
+        events = [
+            MidiEvent("note_off", self.channel, note, 0, self.name) for note in self.sounding
+        ]
+        self.sounding = []
+        return events
+
+    def panic(self) -> List[MidiEvent]:
+        self.active = False
+        self._trigger.reset(False)
+        self._degree = None
+        return self._release_all()
+
+    @property
+    def label(self) -> str:
+        return f"{self.scale} chords from {self.root}"
+
+
+@dataclass
+class ChordMapping(HarmonyMapping):
+    """Hand position -> a chord held until the hand moves to the next one.
+
+    Three notes at once is the difference between a tone and music; this is the
+    left hand's job while the right plays the melody.
+    """
+
+    kind: str = field(init=False, default="chord")
+
+    def update(self, features: TMapping[str, float], now: float) -> List[MidiEvent]:
+        if not self.enabled:
+            return []
+        open_gate, degree = self._resolve(features)
+
+        if not open_gate:
+            self.active = False
+            self._degree = None
+            return self._release_all()
+        if degree is None or degree == self._degree:
+            return []
+
+        events = self._release_all()
+        self._degree = degree
+        self.active = True
+        notes = chord_from_scale(self.root, self.scale, degree, self.size, self.step)
+        velocity = self._velocity()
+        self.sounding = list(notes)
+        self.last_value = notes[0] if notes else 0
+        self._last_sent_at = now
+        events.extend(
+            MidiEvent("note_on", self.channel, note, velocity, self.name) for note in notes
+        )
+        return events
+
+
+@dataclass
+class ArpeggioMapping(HarmonyMapping):
+    """Hand position -> a chord, played one note at a time, in time.
+
+    This is where rhythm comes from. Without it every gesture produces a
+    sustained pad, and sustained pads do not sound like playing.
+    """
+
+    pattern: str = "updown"
+    rate_feature: Optional[str] = None
+    rate_range: Tuple[float, float] = (2.0, 9.0)   # notes per second
+    octaves: int = 2
+    gate_length: float = 0.65                      # fraction of a step held down
+
+    kind: str = field(init=False, default="arpeggio")
+
+    PATTERNS = ("up", "down", "updown", "random")
+
+    def reset(self) -> None:
+        super().reset()
+        self._sequence: List[int] = []
+        self._position = 0
+        self._next_step = 0.0
+        self._note_off_at = math.inf
+        self._random = random.Random(0xA49)
+
+    @property
+    def label(self) -> str:
+        return f"arp {self.pattern} {self.scale}"
+
+    def _build_sequence(self, degree: int) -> List[int]:
+        chord = chord_from_scale(self.root, self.scale, degree, self.size, self.step)
+        notes = [note + 12 * octave for octave in range(max(self.octaves, 1)) for note in chord]
+        notes = sorted(note for note in notes if 0 <= note <= 127)
+        if self.pattern == "down":
+            notes.reverse()
+        elif self.pattern == "updown" and len(notes) > 2:
+            notes = notes + notes[-2:0:-1]
+        return notes
+
+    def _rate(self, features: TMapping[str, float]) -> float:
+        if self.rate_feature is None:
+            return self.rate_range[1]
+        amount = clamp01(float(features.get(self.rate_feature, 0.5)))
+        low, high = self.rate_range
+        return max(low + amount * (high - low), 0.25)
+
+    def update(self, features: TMapping[str, float], now: float) -> List[MidiEvent]:
+        if not self.enabled:
+            return []
+        open_gate, degree = self._resolve(features)
+
+        if not open_gate:
+            self.active = False
+            self._degree = None
+            self._sequence = []
+            self._note_off_at = math.inf
+            return self._release_all()
+
+        events: List[MidiEvent] = []
+        if degree is not None and degree != self._degree:
+            self._degree = degree
+            self._sequence = self._build_sequence(degree)
+            self._position = 0
+            self._next_step = min(self._next_step, now)   # switch chord promptly
+        if not self._sequence:
+            return events
+
+        # Release the previous step once its note length has elapsed, so the
+        # arpeggio is a rhythm of separate notes rather than a held cluster.
+        if now >= self._note_off_at:
+            events.extend(self._release_all())
+            self._note_off_at = math.inf
+
+        if now >= self._next_step:
+            interval = 1.0 / self._rate(features)
+            events.extend(self._release_all())
+            note = self._sequence[self._position % len(self._sequence)]
+            self._position += 1
+            self.sounding = [note]
+            self.active = True
+            self.last_value = note
+            self._last_sent_at = now
+            events.append(MidiEvent("note_on", self.channel, note, self._velocity(), self.name))
+            self._next_step = now + interval
+            self._note_off_at = now + interval * clamp01(self.gate_length)
+        return events
+
+
 @dataclass
 class ScaleMapping(BaseMapping):
     """Hand position -> a note from a musical scale: a playable lead voice.
@@ -479,6 +734,11 @@ _GATE_KEYS = _COMMON_KEYS + ("cc", "number", "threshold", "release", "value_on",
 _NOTE_KEYS = _COMMON_KEYS + (
     "note", "number", "velocity", "threshold", "release", "velocity_feature", "retrigger",
 )
+_HARMONY_KEYS = _COMMON_KEYS + (
+    "root", "scale", "span", "size", "step", "velocity", "velocity_feature",
+    "gate_feature", "threshold", "release", "hysteresis", "input_range", "invert",
+)
+_ARPEGGIO_KEYS = _HARMONY_KEYS + ("pattern", "rate_feature", "rate_range", "octaves", "gate_length")
 _SCALE_KEYS = _COMMON_KEYS + (
     "root", "scale", "octaves", "velocity", "velocity_feature", "gate_feature",
     "threshold", "release", "hysteresis", "input_range", "invert",
@@ -502,6 +762,10 @@ TYPE_ALIASES = {
     "scale": "scale",
     "pitch": "scale",
     "lead": "scale",
+    "chord": "chord",
+    "harmony": "chord",
+    "arpeggio": "arpeggio",
+    "arp": "arpeggio",
 }
 
 
@@ -565,6 +829,61 @@ def _build_mapping(entry: TMapping[str, Any], index: int, default_channel: int) 
         if mapping.curve <= 0:
             raise ConfigError(f"{context}: 'curve' must be positive, got {mapping.curve}")
         return mapping
+
+    if kind in ("chord", "arpeggio"):
+        _check_keys(entry, _ARPEGGIO_KEYS if kind == "arpeggio" else _HARMONY_KEYS, context)
+        scale = str(entry.get("scale", "minor"))
+        if scale not in SCALES:
+            raise ConfigError(
+                f"{context}: unknown scale {scale!r}; expected one of {', '.join(sorted(SCALES))}"
+            )
+        root = _get_int(entry, "root", 48, context)
+        if not 0 <= root <= 127:
+            raise ConfigError(f"{context}: 'root' must be between 0 and 127, got {root}")
+        span = _get_int(entry, "span", 7, context)
+        if span < 1:
+            raise ConfigError(f"{context}: 'span' must be at least 1, got {span}")
+        size = _get_int(entry, "size", 3, context)
+        if not 1 <= size <= 6:
+            raise ConfigError(f"{context}: 'size' must be between 1 and 6, got {size}")
+        threshold = _get_number(entry, "threshold", 0.5, context)
+        release = _get_number(entry, "release", 0.3, context)
+        if release > threshold:
+            raise ConfigError(
+                f"{context}: 'release' ({release}) must not be above 'threshold' ({threshold})"
+            )
+        shared = dict(
+            root=root, scale=scale, span=span, size=size,
+            step=_get_int(entry, "step", 2, context),
+            velocity=_get_int(entry, "velocity", 90, context),
+            velocity_feature=entry.get("velocity_feature"),
+            gate_feature=entry.get("gate_feature"),
+            threshold=threshold, release=release,
+            hysteresis=_get_number(entry, "hysteresis", 0.25, context),
+            input_range=_get_range(entry, "input_range", (0.0, 1.0), context),
+            invert=bool(entry.get("invert", False)),
+            **common,
+        )
+        if kind == "chord":
+            return ChordMapping(**shared)
+
+        pattern = str(entry.get("pattern", "updown"))
+        if pattern not in ArpeggioMapping.PATTERNS:
+            raise ConfigError(
+                f"{context}: unknown pattern {pattern!r}; expected one of "
+                + ", ".join(ArpeggioMapping.PATTERNS)
+            )
+        rate_range = _get_range(entry, "rate_range", (2.0, 9.0), context, allow_equal=True)
+        if min(rate_range) <= 0:
+            raise ConfigError(f"{context}: 'rate_range' must be positive, got {list(rate_range)}")
+        return ArpeggioMapping(
+            pattern=pattern,
+            rate_feature=entry.get("rate_feature"),
+            rate_range=rate_range,
+            octaves=_get_int(entry, "octaves", 2, context),
+            gate_length=_get_number(entry, "gate_length", 0.65, context),
+            **shared,
+        )
 
     if kind == "scale":
         _check_keys(entry, _SCALE_KEYS, context)

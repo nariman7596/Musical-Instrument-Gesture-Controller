@@ -235,9 +235,20 @@ class TestFeatureVector:
         assert distance(0.05) < distance(0.2) < distance(0.4)
 
     def test_every_documented_feature_is_produced(self):
-        vector = build_feature_vector(
-            {"left": make_hand(aspect=WIDE), "right": make_hand(aspect=WIDE)}, aspect=WIDE
-        )
+        """Documentation and reality must not drift apart.
+
+        Speed is the one feature a single frame cannot supply, so it comes from
+        MotionTracker — but it is still documented, and still valid in a mapping.
+        """
+        from src.gesture_features import MOTION_FEATURES, MotionTracker
+
+        hands = {"left": make_hand(aspect=WIDE), "right": make_hand(aspect=WIDE)}
+        vector = build_feature_vector(hands, aspect=WIDE)
+        assert set(feature_names()) - set(MOTION_FEATURES) == set(vector)
+
+        tracker = MotionTracker()
+        tracker.update(hands, vector, 0.0, WIDE)
+        tracker.update(hands, vector, 0.05, WIDE)
         assert set(feature_names()) == set(vector)
 
     def test_rejects_wrong_landmark_shape(self):
@@ -281,3 +292,86 @@ class TestRealHands:
             )
             for name, value in features.items():
                 assert 0.0 <= value <= 1.0, f"{name}={value} out of range in {case['image']}"
+
+
+# -- motion and finger counting --------------------------------------------
+class TestFingerCount:
+    @pytest.mark.parametrize("kwargs, expected", [
+        (dict(curl=1.0, thumb=0.0), 0.0),
+        (dict(curls={"index": 0, "middle": 1, "ring": 1, "pinky": 1}, thumb=0.0), 0.2),
+        (dict(curls={"index": 0, "middle": 0, "ring": 1, "pinky": 1}, thumb=0.0), 0.4),
+        (dict(curl=0.0, thumb=1.0), 1.0),
+    ])
+    def test_counts_extended_fingers_in_fifths(self, kwargs, expected):
+        features = hand_features(make_hand(aspect=WIDE, **kwargs), "right", aspect=WIDE)
+        assert features["finger_count"] == pytest.approx(expected)
+
+    def test_it_is_a_usable_selector(self):
+        """Distinct poses must land on distinct values, or it cannot pick anything."""
+        counts = {
+            hand_features(make_hand(aspect=WIDE, **kwargs), "right", aspect=WIDE)["finger_count"]
+            for kwargs in (
+                dict(curl=1.0, thumb=0.0),
+                dict(curls={"index": 0, "middle": 1, "ring": 1, "pinky": 1}, thumb=0.0),
+                dict(curls={"index": 0, "middle": 0, "ring": 1, "pinky": 1}, thumb=0.0),
+                dict(curl=0.0, thumb=1.0),
+            )
+        }
+        assert len(counts) == 4
+
+
+class TestMotionTracker:
+    from src.gesture_features import MotionTracker
+
+    def track(self, positions, dt=1 / 30):
+        tracker = self.MotionTracker()
+        values = []
+        for index, x in enumerate(positions):
+            hands = {"right": make_hand(center=(x, 0.5), aspect=WIDE), "left": None}
+            vector = build_feature_vector(hands, aspect=WIDE)
+            tracker.update(hands, vector, index * dt, WIDE)
+            values.append(vector.get("right.speed"))
+        return values
+
+    def test_the_first_frame_has_no_speed_yet(self):
+        assert self.track([0.5])[0] is None
+
+    def test_a_still_hand_reads_as_slow(self):
+        assert self.track([0.5] * 10)[-1] == pytest.approx(0.0, abs=0.01)
+
+    def test_a_moving_hand_reads_as_fast(self):
+        assert self.track([0.2 + 0.06 * step for step in range(10)])[-1] > 0.5
+
+    def test_faster_movement_reads_higher(self):
+        slow = self.track([0.4 + 0.004 * step for step in range(10)])[-1]
+        fast = self.track([0.4 + 0.04 * step for step in range(10)])[-1]
+        assert fast > slow
+
+    def test_landmark_jitter_does_not_read_as_movement(self):
+        """A still hand jitters by a pixel or two; that must not read as a strike."""
+        positions = [0.5 + 0.004 * (-1) ** step for step in range(16)]
+        peak = max(value for value in self.track(positions) if value is not None)
+        assert peak < 0.35
+
+    def test_a_real_strike_still_reads_high(self):
+        """Smoothing must not blunt a genuine fast move — that is the point of it."""
+        positions = [0.3] * 4 + [0.3 + 0.09 * step for step in range(5)]
+        assert max(value for value in self.track(positions) if value is not None) > 0.8
+
+    def test_losing_the_hand_clears_its_state(self):
+        tracker = self.MotionTracker()
+        hands = {"right": make_hand(aspect=WIDE), "left": None}
+        tracker.update(hands, build_feature_vector(hands, aspect=WIDE), 0.0, WIDE)
+        tracker.update({"right": None, "left": None}, {}, 0.1, WIDE)
+        # Coming back must not report a huge jump from the stale position.
+        vector = build_feature_vector(hands, aspect=WIDE)
+        tracker.update(hands, vector, 5.0, WIDE)
+        assert "right.speed" not in vector
+
+    def test_a_stale_timestamp_is_ignored(self):
+        tracker = self.MotionTracker()
+        hands = {"right": make_hand(aspect=WIDE), "left": None}
+        tracker.update(hands, build_feature_vector(hands, aspect=WIDE), 0.0, WIDE)
+        vector = build_feature_vector(hands, aspect=WIDE)
+        tracker.update(hands, vector, 0.0, WIDE)     # same timestamp, no elapsed time
+        assert "right.speed" not in vector

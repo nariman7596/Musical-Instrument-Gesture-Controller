@@ -31,7 +31,7 @@ import cv2
 
 from src import __version__
 from src.camera import CameraSource, CameraOpenError, parse_source
-from src.gesture_features import FEATURE_DOCS, build_feature_vector
+from src.gesture_features import FEATURE_DOCS, MotionTracker, build_feature_vector
 from src.hand_tracker import HandTracker
 from src.midi_mapper import (
     ConfigError,
@@ -181,6 +181,7 @@ class GestureController:
 
         self.mapper = MidiMapper(self.config)
         self.smoother = build_smoother(self.config)
+        self.motion = MotionTracker(self.config.calibration)
         self.watcher = ConfigWatcher(args.config) if args.hot_reload else None
 
         self.muted = False
@@ -292,6 +293,8 @@ class GestureController:
             height, width = frame.image.shape[:2]
             aspect = width / height if height else 1.0
             raw_features = build_feature_vector(hands, self.config.calibration, aspect)
+            # Speed needs the previous frame, so it is added separately.
+            self.motion.update(hands, raw_features, frame.timestamp, aspect)
             features = self.smoother.update(raw_features)
             events = self.mapper.update(features, now=time.monotonic())
 
@@ -401,6 +404,7 @@ class GestureController:
             self.config = new_config
         self.mapper = MidiMapper(self.config)
         self.smoother = build_smoother(self.config)
+        self.motion = MotionTracker(self.config.calibration)
         log.info("mapping reloaded: %s", self.config.describe().splitlines()[0])
 
     def _maybe_report(self) -> None:

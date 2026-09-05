@@ -149,6 +149,35 @@ pitches. Set `scale` to any of `pentatonic_minor`, `pentatonic_major`, `major`,
 `minor`, `blues`, `dorian` or `chromatic`, `root` to where it starts, and
 `octaves` to how far the ladder reaches.
 
+### Two hands, two parts
+
+`config/ensemble.json` is the fullest patch: the **left hand holds an
+arpeggiated chord progression** while the **right hand plays the melody** over
+it, in the same key.
+
+```bash
+python main.py --camera 0 --show --synth --config config/ensemble.json
+```
+
+| Gesture | What it does |
+| --- | --- |
+| Left hand across the frame | which chord is arpeggiating |
+| Left hand height | how fast it arpeggiates (2-9 notes/second) |
+| Right hand across the frame | the melody note |
+| **How fast you move the right hand** | how hard the note is struck |
+| Right hand height | brightness |
+| Right fingers spread | resonance |
+| Right hand pinch | fade out |
+| Right palm roll | pan |
+| Left fist | sustain — everything blurs into a wash |
+| Left peace sign | vibrato |
+| Hands apart | reverb |
+
+Chords are built by stacking notes *within* the scale, so every chord belongs to
+the key no matter where your hand is; the arpeggio then walks that chord in
+time, which is where the rhythm comes from. A held chord instead of an arpeggio
+is `"type": "chord"`.
+
 ### Hearing it without a DAW
 
 A control change only *shapes* a sound that something else is playing, so the
@@ -222,8 +251,9 @@ the right hand shapes the sound, the left hand handles transport.
 | One hand above the other | pitch bend | `both.hands_vertical_delta` |
 | Horizontal hand spread | CC 77 stereo width | `both.hands_spread` |
 
-Two more presets ship with it: `config/play.json` turns it into a playable
-instrument (see above), and `config/theremin.json` is built for a camera mounted
+Three more presets ship with it: `config/play.json` turns it into a playable
+lead, `config/ensemble.json` gives each hand its own part (melody over
+arpeggiated chords), and `config/theremin.json` is built for a camera mounted
 further away (the ceiling V380) — fewer, wider gestures and heavier smoothing.
 
 ---
@@ -260,6 +290,8 @@ ignored, keeping the previous patch alive.
 | --- | --- | --- |
 | `cc` | control change 0-127 | `cc` (required) |
 | `scale` | notes of a musical scale, monophonic | `root`, `scale`, `octaves`, `velocity`, `gate_feature`, `hysteresis` |
+| `chord` | a chord stacked from the scale, held | `root`, `scale`, `span`, `size`, `step`, `gate_feature` |
+| `arpeggio` | that chord, one note at a time, in time | as `chord` plus `pattern`, `rate_feature`, `rate_range`, `octaves`, `gate_length` |
 | `gate` | control change on/off | `cc`, `value_on`, `value_off`, `threshold`, `release` |
 | `note` | note on / note off | `note`, `velocity`, `velocity_feature`, `retrigger`, `threshold`, `release` |
 | `pitch_bend` | 14-bit pitch bend | — |
@@ -298,6 +330,21 @@ ignored, keeping the previous patch alive.
 | `hysteresis` | `0.2` | extra travel needed to change note, in note steps |
 | `velocity_feature` | — | feature scaling how hard each note is struck |
 
+### Chords and arpeggios (`chord`, `arpeggio`)
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `root` | `48` (C3) | tonic of the key |
+| `scale` | `minor` | which chords exist; 7-note scales give ordinary triads |
+| `span` | `7` | how many different chords the hand reaches |
+| `size` | `3` | notes per chord; `4` for sevenths |
+| `step` | `2` | scale degrees between chord notes; `2` is thirds |
+| `pattern` | `updown` | `up`, `down`, `updown` or `random` (arpeggio only) |
+| `rate_feature` | — | feature controlling notes per second (arpeggio only) |
+| `rate_range` | `[2, 9]` | notes per second at the ends of that feature |
+| `octaves` | `2` | how many octaves the arpeggio climbs |
+| `gate_length` | `0.65` | fraction of each step the note is held — lower is more staccato |
+
 ### Gates and notes (`gate`, `note`)
 
 | Field | Default | Meaning |
@@ -329,6 +376,8 @@ Run `python main.py --list-features`, or:
 | `<hand>.open_palm` | gate: all fingers extended |
 | `<hand>.point_up` | gate: index up, others curled |
 | `<hand>.peace` | gate: index + middle up, ring + pinky curled |
+| `<hand>.finger_count` | how many fingers are up, in fifths (0.0, 0.2 … 1.0) |
+| `<hand>.speed` | how fast the hand is moving — for striking notes harder |
 | `<hand>.{thumb,index,middle,ring,pinky}_extension` | per-finger, 0.0 = curled |
 | `both.hands_distance` | wrist-to-wrist distance (theremin axis) |
 | `both.hands_vertical_delta` | vertical wrist offset; 0.5 = level |
@@ -401,13 +450,14 @@ that a DAW has to chew through. With it, a still hand sends nothing at all.
 │   └── visualizer.py          # skeleton + CC meter overlay
 ├── config/
 │   ├── default_mapping.json   # the studio patch described above
+│   ├── ensemble.json          # two hands, two parts: melody over arpeggios
 │   ├── play.json              # playable pentatonic lead, for --synth
 │   └── theremin.json          # wide, two-handed patch for a distant camera
 ├── examples/
 │   └── one_file_gesture_music.py  # the whole idea in one script
 ├── notebooks/
 │   └── 01_landmark_exploration.ipynb
-└── tests/                     # 245 tests, no camera, MIDI or audio hardware needed
+└── tests/                     # 289 tests, no camera, MIDI or audio hardware needed
 ```
 
 ## Tests
@@ -439,6 +489,7 @@ the dry-run sink, and skips itself if MediaPipe is not installed.
 | Gestures never trigger | run `--debug-features`, read the real values, adjust `calibration` |
 | Everything works but there is no sound | expected — CCs only shape a sound that already exists. Add `--synth`, or hold notes on a keyboard while gesturing |
 | One droning note, no melody | that patch only sends control changes; use `--config config/play.json` to play notes with your hand |
+| Melody but no rhythm or harmony | use `--config config/ensemble.json` — the left hand arpeggiates chords under the right hand's melody |
 | `audio output unavailable: PortAudio library not found` | Linux only; `sudo apt install libportaudio2`. The macOS and Windows wheels bundle it |
 | RTSP stream stutters | try `--rtsp-transport udp`, or lower the camera's resolution |
 
