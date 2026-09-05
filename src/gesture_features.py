@@ -102,6 +102,13 @@ class FeatureCalibration:
     hands_spread: tuple = (0.05, 0.95)
     #: Wrist speed in image units per second -> the ``speed`` feature.
     hand_speed: tuple = (0.05, 1.60)
+    #: Thumb-tip to fingertip distance for the per-finger pinches. Touching
+    #: measures about 0.2 palm units; 0.55 is comfortably apart.
+    pinch_touch: tuple = (0.15, 0.55)
+    #: How extended a finger must be for closeness to count as a pinch. A
+    #: *curled* finger also sits near the thumb — a fist measures the same 0.2 —
+    #: so without this every clenched hand would read as four pinches at once.
+    pinch_extension: tuple = (0.20, 0.50)
 
     #: A finger counts as "extended" above this normalised value ...
     extended_threshold: float = 0.65
@@ -343,6 +350,50 @@ def hand_features(
         ) / 5.0,
     }
     features.update({f"{name}_extension": value for name, value in fingers.items()})
+    features.update(_pinch_features(xy, scale, fingers, calib))
+    return features
+
+
+#: Fingertip landmark for each finger the thumb can meet.
+PINCH_TIPS = (("index", INDEX_TIP), ("middle", MIDDLE_TIP), ("ring", RING_TIP), ("pinky", PINKY_TIP))
+
+
+def _pinch_features(
+    xy: np.ndarray, scale: float, fingers: Dict[str, float], calib: FeatureCalibration
+) -> Dict[str, float]:
+    """Thumb-to-finger pinches: four keys under one thumb.
+
+    Each pinch is *closeness times extension*, not closeness alone. A curled
+    finger rests as near the thumb as a pinched one does — a clenched fist
+    measures the same 0.2 palm units as a real thumb-to-index touch — so
+    distance by itself reports a fist as four simultaneous pinches. Requiring
+    the finger to be reaching out to meet the thumb separates the two cleanly.
+    """
+    strengths = {}
+    distances = {}
+    for name, tip in PINCH_TIPS:
+        distance = _dist(xy, THUMB_TIP, tip) / scale
+        distances[name] = distance
+        closeness = 1.0 - normalise(distance, *calib.pinch_touch)
+        reaching = normalise(fingers[name], *calib.pinch_extension)
+        strengths[name] = closeness * reaching
+
+    features = {f"pinch_{name}": value for name, value in strengths.items()}
+    # One gate for "a pinch is happening", whichever finger it is.
+    features["pinch_any"] = max(strengths.values())
+
+    # Which finger the thumb is on, as 0, 1/3, 2/3, 1 — feed this to a scale
+    # mapping and each finger becomes a note.
+    #
+    # Reported *only while a pinch is happening*, following the same convention
+    # as an untracked hand: a feature that is absent holds its last value
+    # downstream. Reporting a fallback instead (say, the nearest finger) makes
+    # the selector jump the moment the thumb lifts, while the smoothed gate is
+    # still open — which sounds a stray note at the end of every note played.
+    if features["pinch_any"] > 0.0:
+        order = [name for name, _ in PINCH_TIPS]
+        chosen = max(order, key=lambda name: strengths[name])
+        features["pinch_select"] = order.index(chosen) / (len(order) - 1)
     return features
 
 
@@ -419,6 +470,12 @@ FEATURE_DOCS = {
     "<hand>.point_up": "gate: index finger pointing up, others curled",
     "<hand>.peace": "gate: index + middle extended, ring + pinky curled",
     "<hand>.finger_count": "extended fingers, in fifths (0.0, 0.2 ... 1.0)",
+    "<hand>.pinch_index": "thumb touching the index fingertip",
+    "<hand>.pinch_middle": "thumb touching the middle fingertip",
+    "<hand>.pinch_ring": "thumb touching the ring fingertip",
+    "<hand>.pinch_pinky": "thumb touching the little fingertip",
+    "<hand>.pinch_any": "gate: the thumb is touching some fingertip",
+    "<hand>.pinch_select": "which finger the thumb is on (0, 1/3, 2/3, 1); only while pinching",
     "<hand>.speed": "how fast the hand is moving (needs MotionTracker)",
     "<hand>.thumb_extension": "thumb extension, 0.0 = tucked",
     "<hand>.index_extension": "index extension, 0.0 = curled",
@@ -489,6 +546,11 @@ class MotionTracker:
 
 #: Features supplied by :class:`MotionTracker` rather than by a single frame.
 MOTION_FEATURES = ("left.speed", "right.speed")
+
+#: Features reported only while the gesture they describe is happening. Absent
+#: means "hold the last value" downstream, which is the point: a selector that
+#: reported a fallback would jump the moment the gesture ends.
+CONDITIONAL_FEATURES = ("left.pinch_select", "right.pinch_select")
 
 
 def feature_names() -> Sequence[str]:

@@ -574,6 +574,17 @@ class ScaleMapping(BaseMapping):
     hysteresis: float = 0.2                 # extra travel needed, in note steps
     input_range: Tuple[float, float] = (0.0, 1.0)
     invert: bool = False
+    #: A second feature that shifts the whole ladder, so a small selector can
+    #: still reach a lot of notes: four thumb-to-finger pinches at three hand
+    #: heights is twelve notes, not four.
+    offset_feature: Optional[str] = None
+    offset_span: int = 3                    # positions the offset feature has
+    offset_step: int = 4                    # scale degrees added per position
+    #: How many notes the driving feature itself covers. ``None`` spreads it
+    #: over the whole ladder; a small number is what lets a selector with a few
+    #: positions (four thumb pinches) pick adjacent notes while ``offset_step``
+    #: moves the whole hand-span up and down the ladder.
+    span: Optional[int] = None
 
     kind: str = field(init=False, default="scale")
 
@@ -591,6 +602,7 @@ class ScaleMapping(BaseMapping):
         super().reset()
         self._trigger = SchmittTrigger(self.threshold, self.release)
         self._index: Optional[int] = None
+        self._offset_index: Optional[int] = None
         self._velocity_source = 1.0
         self.sounding_note: Optional[int] = None
 
@@ -599,7 +611,8 @@ class ScaleMapping(BaseMapping):
         amount = normalise(raw, *self.input_range)
         if self.invert:
             amount = 1.0 - amount
-        return amount * (len(self.notes) - 1)
+        steps = (self.span - 1) if self.span else (len(self.notes) - 1)
+        return amount * max(steps, 1)
 
     def _quantise(self, position: float) -> int:
         """Nearest note index, holding the current one inside the dead band."""
@@ -620,6 +633,12 @@ class ScaleMapping(BaseMapping):
         if not self.enabled:
             return []
 
+        # Track the register continuously, even with nothing sounding. Moving
+        # your hand changes which octave you are in whether or not you happen to
+        # be playing; updating it only while a note sounds means the first note
+        # after moving is struck in the register you just left.
+        self._track_offset(features)
+
         gate_value = features.get(self.gate_feature) if self.gate_feature else None
         if gate_value is None:
             gate_value = 1.0 if raw is not None else 0.0
@@ -633,8 +652,12 @@ class ScaleMapping(BaseMapping):
             return []
 
         position = self._position(float(raw))
-        self.display = position / max(len(self.notes) - 1, 1)
+        self.display = position / max((self.span or len(self.notes)) - 1, 1)
         index = self._quantise(position)
+
+        if self.offset_feature is not None:
+            index += (self._offset_index or 0) * self.offset_step
+
         note = self.notes[max(0, min(index, len(self.notes) - 1))]
 
         if note == self.sounding_note:
@@ -651,6 +674,16 @@ class ScaleMapping(BaseMapping):
             velocity = max(1, int(round(self.velocity * self._velocity_source)))
         events.append(MidiEvent("note_on", self.channel, note, velocity, self.name))
         return events
+
+    def _track_offset(self, features: TMapping[str, float]) -> None:
+        """Follow the register-shifting feature, gate open or closed."""
+        if self.offset_feature is None:
+            return
+        source = features.get(self.offset_feature)
+        if source is None:
+            return
+        spot = clamp01(float(source)) * max(self.offset_span - 1, 1)
+        self._offset_index = _quantise(spot, self._offset_index, self.hysteresis)
 
     def _release(self) -> List[MidiEvent]:
         if self.sounding_note is None:
@@ -742,6 +775,7 @@ _ARPEGGIO_KEYS = _HARMONY_KEYS + ("pattern", "rate_feature", "rate_range", "octa
 _SCALE_KEYS = _COMMON_KEYS + (
     "root", "scale", "octaves", "velocity", "velocity_feature", "gate_feature",
     "threshold", "release", "hysteresis", "input_range", "invert",
+    "offset_feature", "offset_span", "offset_step", "span",
 )
 
 #: Accepted ``type`` spellings -> canonical kind.
@@ -916,6 +950,10 @@ def _build_mapping(entry: TMapping[str, Any], index: int, default_channel: int) 
             hysteresis=_get_number(entry, "hysteresis", 0.2, context),
             input_range=_get_range(entry, "input_range", (0.0, 1.0), context),
             invert=bool(entry.get("invert", False)),
+            offset_feature=entry.get("offset_feature"),
+            offset_span=_get_int(entry, "offset_span", 3, context),
+            offset_step=_get_int(entry, "offset_step", 4, context),
+            span=_get_int(entry, "span", None, context) if entry.get("span") is not None else None,
             **common,
         )
 
@@ -1099,13 +1137,27 @@ def load_config(path) -> ControllerConfig:
 # Runtime
 # --------------------------------------------------------------------------
 def build_smoother(config: ControllerConfig) -> EMASmoother:
-    """Create an :class:`EMASmoother` honouring per-mapping ``smoothing`` overrides."""
+    """Create an :class:`EMASmoother` honouring per-mapping ``smoothing`` overrides.
+
+    A mapping's window applies to every feature that decides *which note* it
+    plays — the driving feature and any register offset. They have to move
+    together: if the offset lags behind, striking a note the instant you change
+    register sounds it in the register you just left.
+
+    Feature windows are global, so two mappings that smooth the same feature
+    differently resolve last-one-wins; in practice a feature is only ever the
+    note source for one mapping.
+    """
     smoother = EMASmoother(
         window=config.smoothing.window, reset_after=config.smoothing.reset_after
     )
     for mapping in config.mappings:
-        if mapping.smoothing is not None:
-            smoother.set_window(mapping.feature, mapping.smoothing)
+        if mapping.smoothing is None:
+            continue
+        smoother.set_window(mapping.feature, mapping.smoothing)
+        offset_feature = getattr(mapping, "offset_feature", None)
+        if offset_feature is not None:
+            smoother.set_window(offset_feature, mapping.smoothing)
     return smoother
 
 

@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "name": "Pinch keys",
+  "description": "Four keys under one thumb: touch the thumb to each fingertip to play a note, and raise the hand to move up the scale. The left hand arpeggiates chords underneath. Made for --synth.",
+  "midi": {
+    "channel": 1,
+    "port_name": "Gesture MIDI Controller"
+  },
+  "smoothing": {
+    "window": 3,
+    "reset_after": 15
+  },
+  "synth": {
+    "drone": -1,
+    "gain": 0.28
+  },
+  "mappings": [
+    {
+      "name": "Pinch Keys",
+      "comment": "Thumb to index/middle/ring/little = four notes. Hand low, middle or high shifts the whole set up the scale, so twelve notes are reachable. Pinch harder to play louder. smoothing 1 because which finger you are touching is a choice, not a position: averaging it glides through the notes in between.",
+      "feature": "right.pinch_select",
+      "type": "scale",
+      "root": 57,
+      "scale": "pentatonic_minor",
+      "octaves": 3,
+      "span": 4,
+      "gate_feature": "right.pinch_any",
+      "threshold": 0.55,
+      "release": 0.35,
+      "offset_feature": "right.height",
+      "offset_span": 3,
+      "offset_step": 4,
+      "hysteresis": 0.15,
+      "velocity": 110,
+      "velocity_feature": "right.pinch_any",
+      "smoothing": 1
+    },
+    {
+      "name": "Arpeggio",
+      "comment": "Left hand picks the chord underneath; raise it to arpeggiate faster.",
+      "feature": "left.x",
+      "type": "arpeggio",
+      "root": 45,
+      "scale": "minor",
+      "span": 5,
+      "size": 3,
+      "octaves": 2,
+      "pattern": "updown",
+      "rate_feature": "left.height",
+      "rate_range": [
+        1.5,
+        8.0
+      ],
+      "gate_length": 0.6,
+      "velocity": 70,
+      "gate_feature": "left.present",
+      "input_range": [
+        0.1,
+        0.9
+      ]
+    },
+    {
+      "name": "Brightness",
+      "comment": "Open the left hand to open the filter.",
+      "feature": "left.openness",
+      "type": "cc",
+      "cc": 74,
+      "input_range": [
+        0.1,
+        0.95
+      ],
+      "curve": 1.2,
+      "deadband": 1
+    },
+    {
+      "name": "Resonance",
+      "feature": "left.finger_spread",
+      "type": "cc",
+      "cc": 71,
+      "input_range": [
+        0.15,
+        0.9
+      ],
+      "deadband": 2
+    },
+    {
+      "name": "Pan",
+      "feature": "right.roll",
+      "type": "cc",
+      "cc": 10,
+      "input_range": [
+        0.2,
+        0.8
+      ],
+      "deadband": 2,
+      "smoothing": 8
+    },
+    {
+      "name": "Vibrato",
+      "feature": "left.peace",
+      "type": "gate",
+      "cc": 1,
+      "threshold": 0.7,
+      "release": 0.3,
+      "value_on": 95,
+      "value_off": 0
+    },
+    {
+      "name": "Sustain",
+      "feature": "left.fist",
+      "type": "gate",
+      "cc": 64,
+      "threshold": 0.65,
+      "release": 0.35
+    },
+    {
+      "name": "Reverb Send",
+      "feature": "both.hands_distance",
+      "type": "cc",
+      "cc": 91,
+      "deadband": 2
+    }
+  ]
+}

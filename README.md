@@ -149,6 +149,30 @@ pitches. Set `scale` to any of `pentatonic_minor`, `pentatonic_major`, `major`,
 `minor`, `blues`, `dorian` or `chromatic`, `root` to where it starts, and
 `octaves` to how far the ladder reaches.
 
+### Playing with your fingers
+
+`config/pinch.json` puts four keys under your thumb: **touch your thumb to each
+fingertip to play a note**, and raise or lower the hand to move the whole set up
+and down the scale — twelve notes without moving your arm far.
+
+```bash
+python main.py --camera 0 --show --synth --config config/pinch.json
+```
+
+| | hand low | hand middle | hand high |
+| --- | --- | --- | --- |
+| thumb + index | A3 | G4 | E5 |
+| thumb + middle | C4 | A4 | G5 |
+| thumb + ring | D4 | C5 | A5 |
+| thumb + little | E4 | D5 | C6 |
+
+Pinch harder to play louder. The left hand arpeggiates chords underneath, opens
+the filter as it opens, and sustains with a fist.
+
+A pinch is measured as *closeness times how extended the finger is*, not
+closeness alone: a curled finger rests as near the thumb as a pinched one does,
+so a clenched fist would otherwise read as four pinches at once.
+
 ### Two hands, two parts
 
 `config/ensemble.json` is the fullest patch: the **left hand holds an
@@ -251,10 +275,11 @@ the right hand shapes the sound, the left hand handles transport.
 | One hand above the other | pitch bend | `both.hands_vertical_delta` |
 | Horizontal hand spread | CC 77 stereo width | `both.hands_spread` |
 
-Three more presets ship with it: `config/play.json` turns it into a playable
-lead, `config/ensemble.json` gives each hand its own part (melody over
-arpeggiated chords), and `config/theremin.json` is built for a camera mounted
-further away (the ceiling V380) — fewer, wider gestures and heavier smoothing.
+Four more presets ship with it: `config/play.json` turns it into a playable
+lead, `config/pinch.json` puts four keys under your thumb, `config/ensemble.json`
+gives each hand its own part (melody over arpeggiated chords), and
+`config/theremin.json` is built for a camera mounted further away (the ceiling
+V380) — fewer, wider gestures and heavier smoothing.
 
 ---
 
@@ -327,6 +352,10 @@ ignored, keeping the previous patch alive.
 | `scale` | `pentatonic_minor` | which notes are reachable at all |
 | `octaves` | `2` | how far the ladder reaches |
 | `gate_feature` | `<hand>.present` | what decides when it sounds |
+| `span` | whole ladder | how many notes the driving feature covers — set it when the feature has few positions, like four pinches |
+| `offset_feature` | — | a second feature that shifts the whole set up the scale |
+| `offset_span` | `3` | how many positions that feature has |
+| `offset_step` | `4` | scale degrees added per position |
 | `hysteresis` | `0.2` | extra travel needed to change note, in note steps |
 | `velocity_feature` | — | feature scaling how hard each note is struck |
 
@@ -378,6 +407,9 @@ Run `python main.py --list-features`, or:
 | `<hand>.peace` | gate: index + middle up, ring + pinky curled |
 | `<hand>.finger_count` | how many fingers are up, in fifths (0.0, 0.2 … 1.0) |
 | `<hand>.speed` | how fast the hand is moving — for striking notes harder |
+| `<hand>.pinch_index` … `pinch_pinky` | thumb touching that fingertip |
+| `<hand>.pinch_any` | gate: the thumb is touching some fingertip |
+| `<hand>.pinch_select` | which finger the thumb is on (0, ⅓, ⅔, 1); reported only while pinching |
 | `<hand>.{thumb,index,middle,ring,pinky}_extension` | per-finger, 0.0 = curled |
 | `both.hands_distance` | wrist-to-wrist distance (theremin axis) |
 | `both.hands_vertical_delta` | vertical wrist offset; 0.5 = level |
@@ -451,13 +483,14 @@ that a DAW has to chew through. With it, a still hand sends nothing at all.
 ├── config/
 │   ├── default_mapping.json   # the studio patch described above
 │   ├── ensemble.json          # two hands, two parts: melody over arpeggios
+│   ├── pinch.json             # four keys under your thumb
 │   ├── play.json              # playable pentatonic lead, for --synth
 │   └── theremin.json          # wide, two-handed patch for a distant camera
 ├── examples/
 │   └── one_file_gesture_music.py  # the whole idea in one script
 ├── notebooks/
 │   └── 01_landmark_exploration.ipynb
-└── tests/                     # 289 tests, no camera, MIDI or audio hardware needed
+└── tests/                     # 314 tests, no camera, MIDI or audio hardware needed
 ```
 
 ## Tests
@@ -490,6 +523,8 @@ the dry-run sink, and skips itself if MediaPipe is not installed.
 | Everything works but there is no sound | expected — CCs only shape a sound that already exists. Add `--synth`, or hold notes on a keyboard while gesturing |
 | One droning note, no melody | that patch only sends control changes; use `--config config/play.json` to play notes with your hand |
 | Melody but no rhythm or harmony | use `--config config/ensemble.json` — the left hand arpeggiates chords under the right hand's melody |
+| Notes fire while your hand is just closed | a curled finger sits near the thumb; raise `calibration.pinch_extension` so more reach is needed |
+| A stray note slips in before the one you wanted | a categorical selector must not be smoothed — set that mapping's `smoothing` to `1` |
 | `audio output unavailable: PortAudio library not found` | Linux only; `sudo apt install libportaudio2`. The macOS and Windows wheels bundle it |
 | RTSP stream stutters | try `--rtsp-transport udp`, or lower the camera's resolution |
 

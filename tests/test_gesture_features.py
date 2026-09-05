@@ -240,15 +240,31 @@ class TestFeatureVector:
         Speed is the one feature a single frame cannot supply, so it comes from
         MotionTracker — but it is still documented, and still valid in a mapping.
         """
-        from src.gesture_features import MOTION_FEATURES, MotionTracker
+        from src.gesture_features import (
+            CONDITIONAL_FEATURES,
+            MOTION_FEATURES,
+            THUMB_TIP,
+            INDEX_TIP,
+            MotionTracker,
+        )
 
         hands = {"left": make_hand(aspect=WIDE), "right": make_hand(aspect=WIDE)}
         vector = build_feature_vector(hands, aspect=WIDE)
-        assert set(feature_names()) - set(MOTION_FEATURES) == set(vector)
+        always = set(feature_names()) - set(MOTION_FEATURES) - set(CONDITIONAL_FEATURES)
+        assert always == set(vector)
 
+        # Speed needs the previous frame ...
         tracker = MotionTracker()
         tracker.update(hands, vector, 0.0, WIDE)
         tracker.update(hands, vector, 0.05, WIDE)
+
+        # ... and the pinch selector only exists while a pinch is happening.
+        pinched = {}
+        for side in ("left", "right"):
+            landmarks = make_hand(curl=0.25, thumb=1.0, aspect=WIDE)
+            landmarks[THUMB_TIP] = landmarks[INDEX_TIP]
+            pinched[side] = landmarks
+        vector.update(build_feature_vector(pinched, aspect=WIDE))
         assert set(feature_names()) == set(vector)
 
     def test_rejects_wrong_landmark_shape(self):
